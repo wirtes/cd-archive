@@ -55,7 +55,13 @@ The web app requires login for the desktop catalog, mobile add page, and every `
 
 The default user is seeded as both an admin and editor. Admins can open `/admin.html` to create users and assign admin and/or editor roles. Editors can add, edit, delete, and manually match catalog items. Users without admin or editor roles can browse only; catalog write APIs return `403`.
 
-## Build The Database
+## Scripts
+
+The `scripts/` directory contains the maintenance commands for importing data and running the app as a Debian system service.
+
+### `scripts/build_database.py`
+
+Imports `data/CD Catalog.csv`, creates or rebuilds `data/cd_catalog.sqlite`, imports the catalog rows, and optionally enriches albums from MusicBrainz, Discogs, and Last.fm.
 
 Import the CSV only:
 
@@ -69,7 +75,106 @@ Import the CSV and enrich the first 50 catalog rows:
 python3 scripts/build_database.py --enrich 50
 ```
 
-The script uses the `api_cache` table so repeated runs reuse cached API payloads unless `--refresh-cache` is supplied.
+Use a different CSV or database path:
+
+```sh
+python3 scripts/build_database.py --csv path/to/catalog.csv --db data/test_catalog.sqlite
+```
+
+Force fresh API calls instead of using cached payloads:
+
+```sh
+python3 scripts/build_database.py --enrich 50 --refresh-cache
+```
+
+Options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--csv` | `data/CD Catalog.csv` | Spreadsheet export to import. |
+| `--db` | `data/cd_catalog.sqlite` | SQLite database to create or rebuild. |
+| `--enrich N` | `0` | Enrich the first `N` catalog rows after importing. |
+| `--refresh-cache` | off | Ignore cached API JSON and fetch fresh copies. |
+
+Notes:
+
+- This script does not require `sudo`.
+- It reads `.env` automatically for `DISCOGS_TOKEN` and `LASTFM_API_KEY`.
+- MusicBrainz does not require a token.
+- Discogs enrichment is skipped when `DISCOGS_TOKEN` is not set.
+- Last.fm album and artist enrichment is skipped when `LASTFM_API_KEY` is not set.
+- The script rebuilds the main catalog schema each time it runs. API payloads are cached in SQLite during a run and reused on later enrichment calls unless `--refresh-cache` is supplied.
+- Cover images are saved under `web/covers/`.
+- Artist images are saved under `web/artist-images/`.
+
+### `scripts/install_debian_service.sh`
+
+Creates and starts a `systemd` service for the web app on Debian or Debian-like Linux systems.
+
+Run it with `sudo`:
+
+```sh
+sudo scripts/install_debian_service.sh
+```
+
+The script:
+
+- Writes a service unit to `/etc/systemd/system/radio1190-archive.service` by default.
+- Sets the service working directory to this repository.
+- Runs `app.py` with Python.
+- Sets `PORT=8190` in the service environment.
+- Runs `systemctl daemon-reload`.
+- Enables the service at boot.
+- Restarts the service immediately.
+- Prints `systemctl status` for the service.
+
+Default values:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SERVICE_NAME` | `radio1190-archive` | Name of the systemd service. |
+| `APP_DIR` | repository root | Directory containing `app.py`. |
+| `RUN_USER` | the sudoing user | Linux user account that runs the app. |
+| `PYTHON_BIN` | `/usr/bin/python3` | Python executable used by the service. |
+| `PORT` | `8190` | Port passed to the app. |
+
+Override values by setting environment variables before `sudo`. Preserve them with `sudo -E`:
+
+```sh
+SERVICE_NAME=radio1190-archive PORT=8190 PYTHON_BIN=/usr/bin/python3 sudo -E scripts/install_debian_service.sh
+```
+
+If the app lives somewhere other than the current checkout, set `APP_DIR`:
+
+```sh
+APP_DIR=/opt/radio1190-archive RUN_USER=radio1190 sudo -E scripts/install_debian_service.sh
+```
+
+This script must use `sudo` because it writes to `/etc/systemd/system/` and runs `systemctl`.
+
+### `scripts/restart_debian_service.sh`
+
+Reloads systemd and restarts the installed service after code or configuration changes.
+
+Run it with `sudo`:
+
+```sh
+sudo scripts/restart_debian_service.sh
+```
+
+The script:
+
+- Runs `systemctl daemon-reload`.
+- Restarts `radio1190-archive.service` by default.
+- Prints `systemctl status` for the service.
+
+Use a custom service name when the install script used one:
+
+```sh
+SERVICE_NAME=my-archive sudo -E scripts/restart_debian_service.sh
+```
+
+This script must use `sudo` because restarting a system service requires root privileges.
 
 ## Run The App
 
@@ -100,22 +205,6 @@ If the same user is logged in on a desktop and opens `mobile-add.html`, the desk
 All add forms require `1190_ID` before the album can be saved.
 
 Camera access generally requires HTTPS or localhost. Manual UPC entry works as a fallback when the page is opened over plain HTTP from another device.
-
-## Debian Service
-
-Install and start a systemd service:
-
-```sh
-sudo scripts/install_debian_service.sh
-```
-
-Restart it after changes:
-
-```sh
-sudo scripts/restart_debian_service.sh
-```
-
-Both scripts use `SERVICE_NAME=radio1190-archive` and `PORT=8190` by default. Set `APP_DIR`, `RUN_USER`, `PYTHON_BIN`, `SERVICE_NAME`, or `PORT` before running the install script to override those values.
 
 ## Manual Music Service Matching
 
