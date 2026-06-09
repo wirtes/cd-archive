@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Radio 1190 Music Archive</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1><a class="homeLink" href="/">Radio 1190 Music Archive</a></h1>
+        <p id="stats">Loading catalog…</p>
+      </div>
+      <form id="searchForm" class="controls">
+        <input id="searchInput" type="search" placeholder="Search artist, album, or catalog #" autocomplete="off" />
+        <select id="enrichedFilter" aria-label="MusicBrainz filter">
+          <option value="all">All records</option>
+          <option value="yes">MusicBrainz only</option>
+          <option value="no">Unmatched only</option>
+        </select>
+        <label class="checkboxControl">
+          <input id="hideNaInput" type="checkbox" />
+          <span>Hide N/A albums</span>
+        </label>
+      </form>
+    </header>
+
+    <main class="layout">
+      <section class="results" aria-label="Catalog results">
+        <div class="tableShell">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Artist</th>
+                <th>Album</th>
+                <th>Version</th>
+                <th>Music Service</th>
+              </tr>
+            </thead>
+            <tbody id="albumRows"></tbody>
+          </table>
+        </div>
+        <nav class="pager">
+          <button id="prevPage" type="button">Previous</button>
+          <span id="pageLabel"></span>
+          <button id="nextPage" type="button">Next</button>
+        </nav>
+      </section>
+
+      <aside class="detail" id="detailPane" aria-live="polite">
+        <div class="emptyState">Select an album to see catalog notes and MusicBrainz metadata.</div>
+      </aside>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
