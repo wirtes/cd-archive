@@ -4,12 +4,20 @@ const state = {
   artist: "",
   label: "",
   hideNa: true,
-  enriched: "all",
   limit: 50,
   offset: 0,
   total: 0,
   selectedId: null,
 };
+
+const MUSIC_PREVIEWS_ENABLED = false;
+
+const previewState = {
+  audio: new Audio(),
+  button: null,
+};
+const previewCache = new Map();
+const albumPreviewCache = new Map();
 
 const rowsEl = document.querySelector("#albumRows");
 const detailEl = document.querySelector("#detailPane");
@@ -18,12 +26,14 @@ const prevPage = document.querySelector("#prevPage");
 const nextPage = document.querySelector("#nextPage");
 const searchForm = document.querySelector("#searchForm");
 const searchInput = document.querySelector("#searchInput");
-const enrichedFilter = document.querySelector("#enrichedFilter");
 const hideNaInput = document.querySelector("#hideNaInput");
+const addAlbumButton = document.querySelector("#addAlbumButton");
 const statsEl = document.querySelector("#stats");
 const lightboxEl = document.querySelector("#imageLightbox");
 const lightboxImageEl = document.querySelector("#lightboxImage");
 const lightboxCloseEl = document.querySelector("#lightboxClose");
+let addCoverDataUrl = "";
+let currentDetailPayload = null;
 
 function text(value) {
   return value === null || value === undefined || value === "" ? "—" : value;
@@ -38,8 +48,17 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function escapeRaw(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function escapeAttribute(value) {
-  return escapeHtml(value);
+  return escapeRaw(value);
 }
 
 function parseList(value) {
@@ -62,6 +81,38 @@ function sourceLabel(value) {
     lastfm: "Last.fm",
   };
   return labels[value] || value || "";
+}
+
+function normalizeArtistName(value) {
+  return String(value || "").replace(/\s*\(\d+\)\s*$/, "").replace(/\s+/g, " ").trim();
+}
+
+function isVariousArtist(value) {
+  return ["various", "various artists"].includes(normalizeArtistName(value).toLowerCase());
+}
+
+function renderArtistName(value, className = "") {
+  if (isVariousArtist(value)) {
+    return `<span class="${escapeAttribute(className)}">${escapeHtml("Various Artists")}</span>`;
+  }
+  return `<button class="artistLink ${escapeAttribute(className)}" type="button" data-artist="${escapeAttribute(value)}">${escapeHtml(value)}</button>`;
+}
+
+function renderTrackTitle(album, title) {
+  const value = String(title || "");
+  if (!album.compilation) {
+    return escapeHtml(value);
+  }
+  const separator = value.indexOf(" - ");
+  if (separator <= 0) {
+    return escapeHtml(value);
+  }
+  const artist = value.slice(0, separator).trim();
+  const song = value.slice(separator + 3).trim();
+  if (!artist || !song) {
+    return escapeHtml(value);
+  }
+  return `${renderArtistName(artist, "inline trackArtistLink")} <span class="trackSeparator">-</span> ${escapeHtml(song)}`;
 }
 
 function stripTags(value) {
@@ -87,6 +138,152 @@ function formatDuration(ms) {
   return `${minutes}:${seconds}`;
 }
 
+function currentTimestampValue() {
+  const date = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function formatOptionValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  const options = {
+    cd: "CD",
+    vinyl: "Vinyl",
+    cassette: "Cassette",
+    digital: "Digital",
+  };
+  return options[normalized] || value || "CD";
+}
+
+function normalizePreviewText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function previewSearchTerms(album, track) {
+  const terms = [
+    [album.artist, album.album_name, track.title],
+    [album.artist, track.title],
+    [track.title, album.artist],
+    [album.album_name, track.title],
+  ]
+    .map((parts) => parts.filter(Boolean).join(" ").trim())
+    .filter(Boolean);
+  return [...new Set(terms)];
+}
+
+function albumPreviewKey(album) {
+  return `${album.artist}|${album.album_name}`;
+}
+
+function albumPreviewTerm(album) {
+  const artist = album.artist || "";
+  const albumName = album.album_name || "";
+  return normalizePreviewText(artist) === normalizePreviewText(albumName)
+    ? artist || albumName
+    : [artist, albumName].filter(Boolean).join(" ");
+}
+
+function appleAlbumFromServices(album, external) {
+  const providerOrder = ["musicbrainz", "discogs", "lastfm"];
+  for (const provider of providerOrder) {
+    const match = external.find(
+      (source) =>
+        source.provider === provider &&
+        source.lookup_status === "matched" &&
+        (source.artist || source.title),
+    );
+    if (match) {
+      return {
+        artist: match.artist || album.artist,
+        album_name: match.title || album.album_name,
+      };
+    }
+  }
+  return { artist: album.artist, album_name: album.album_name };
+}
+
+function albumPreviewScore(result, album) {
+  const resultAlbum = normalizePreviewText(result.collectionName);
+  const resultTitle = normalizePreviewText(result.trackName);
+  const resultArtist = normalizePreviewText(result.artistName || result.collectionArtistName);
+  const albumName = normalizePreviewText(album.album_name);
+  const artist = normalizePreviewText(album.artist);
+  if (!albumName) return -1;
+
+  let score = 0;
+  if (resultAlbum && resultAlbum === albumName) {
+    score += 100;
+  } else if (resultAlbum && (resultAlbum.includes(albumName) || albumName.includes(resultAlbum))) {
+    score += 60;
+  } else if (resultTitle && (resultTitle === albumName || resultTitle.includes(albumName) || albumName.includes(resultTitle))) {
+    score += 60;
+  } else {
+    return -1;
+  }
+
+  if (artist && resultArtist === artist) {
+    score += 80;
+  } else if (artist && (resultArtist.includes(artist) || artist.includes(resultArtist))) {
+    score += 45;
+  } else if (artist) {
+    score -= 30;
+  }
+
+  return score;
+}
+
+function previewScore(result, album, track) {
+  if (!result.previewUrl) return -1;
+  const resultTitle = normalizePreviewText(result.trackName);
+  const resultArtist = normalizePreviewText(result.artistName);
+  const resultAlbum = normalizePreviewText(result.collectionName);
+  const title = normalizePreviewText(track.title);
+  const artist = normalizePreviewText(album.artist);
+  const albumName = normalizePreviewText(album.album_name);
+  if (!title) return -1;
+
+  let score = 0;
+  if (resultTitle === title) {
+    score += 100;
+  } else if (resultTitle.includes(title) || title.includes(resultTitle)) {
+    score += 60;
+  } else {
+    const titleWords = title.split(" ").filter((word) => word.length > 2);
+    const matchingWords = titleWords.filter((word) => resultTitle.includes(word)).length;
+    if (!matchingWords) return -1;
+    score += matchingWords * 8;
+  }
+
+  if (artist && resultArtist === artist) {
+    score += 80;
+  } else if (artist && (resultArtist.includes(artist) || artist.includes(resultArtist))) {
+    score += 45;
+  } else if (artist) {
+    score -= 35;
+  }
+
+  if (albumName && resultAlbum === albumName) {
+    score += 25;
+  } else if (albumName && (resultAlbum.includes(albumName) || albumName.includes(resultAlbum))) {
+    score += 15;
+  }
+
+  return score;
+}
+
+function appleSearch(params) {
+  return fetch(`https://itunes.apple.com/search?${params}`).then((response) => {
+    if (!response.ok) throw new Error("Apple lookup failed.");
+    return response.json();
+  });
+}
+
 async function loadStats() {
   const response = await fetch("/api/stats");
   const stats = await response.json();
@@ -100,7 +297,6 @@ async function loadAlbums() {
     artist: state.artist,
     label: state.label,
     hide_na: state.hideNa ? "1" : "0",
-    enriched: state.enriched,
     limit: state.limit,
     offset: state.offset,
   });
@@ -117,18 +313,23 @@ function renderRows(albums) {
       const services = album.matched_services ? album.matched_services.split(",").map((service) => service.trim()).filter(Boolean) : [];
       const serviceText = services.length ? services.map(sourceLabel).join(", ") : "Not found";
       const badgeClass = services.length ? "badge" : "badge missing";
+      const formatClass = album.format_matches_api ? "" : "formatMismatch";
+      const formatTitle =
+        album.format_matches_api || !album.api_formats?.length
+          ? ""
+          : `Catalog format not found in API formats: ${album.api_formats.join(", ")}`;
       return `
         <tr data-id="${album.id}" class="${album.id === state.selectedId ? "selected" : ""}">
           <td>${escapeHtml(album.row_number)}</td>
           <td>
-            <button class="artistLink" type="button" data-artist="${escapeAttribute(album.artist)}">${escapeHtml(album.artist)}</button>
+            ${renderArtistName(album.artist)}
             <div class="subtle radioId">1190_ID: ${escapeHtml(album.catalog_number)}</div>
           </td>
           <td>
             <div>${escapeHtml(album.album_name)}</div>
             ${album.label ? `<button class="labelLink metaLine" type="button" data-label="${escapeAttribute(album.label)}">${escapeHtml(album.label)}</button>` : ""}
           </td>
-          <td>${escapeHtml(album.format || album.media_format)}</td>
+          <td><span class="${formatClass}" title="${escapeAttribute(formatTitle)}">${escapeHtml(album.format || album.media_format)}</span></td>
           <td><span class="${badgeClass}">${escapeHtml(serviceText)}</span></td>
         </tr>
       `;
@@ -151,25 +352,31 @@ async function loadDetail(albumId) {
   });
   const response = await fetch(`/api/albums/${albumId}`);
   const payload = await response.json();
+  currentDetailPayload = payload;
   renderDetail(payload);
   detailEl.scrollTop = 0;
 }
 
 function renderDetail(payload) {
   const { album, artist, tracks = [], genres = [], cover_art: covers = [], external = [], services = [] } = payload;
+  const appleAlbum = appleAlbumFromServices(album, external);
   const frontCover = covers.find((cover) => cover.is_front) || covers[0];
   const coverUrl = frontCover?.local_image_url || frontCover?.thumbnail_large || frontCover?.thumbnail_small || frontCover?.image_url;
   const genreChips = renderGenreChips(genres, external);
   const serviceBadges = renderServiceBadges(services);
   const providerBlocks = renderProviderBlocks(external);
-  const trackList = renderTracks(tracks);
-  const artistBlock = renderArtistBlock(artist);
+  const trackList = renderTracks(appleAlbum, tracks);
+  const artistBlock = album.compilation || isVariousArtist(album.artist) ? "" : renderArtistBlock(artist);
   const serviceUrlForm = renderMusicServiceUrlForm(album, services);
 
   detailEl.innerHTML = `
+    <div class="detailActions">
+      <button class="primaryButton" type="button" data-edit-album="${escapeAttribute(album.id)}">Edit</button>
+      <button class="dangerButton" type="button" data-delete-album="${escapeAttribute(album.id)}">Delete</button>
+    </div>
     ${coverUrl ? renderLightboxImage("coverImage", coverUrl, `${album.album_name} cover art`) : ""}
     <h2>${escapeHtml(album.album_name)}</h2>
-    <p class="metaLine"><button class="artistLink inline" type="button" data-artist="${escapeAttribute(album.artist)}">${escapeHtml(album.artist)}</button> · row ${escapeHtml(album.row_number)}</p>
+    <p class="metaLine">${renderArtistName(album.artist, "inline")} · row ${escapeHtml(album.row_number)}</p>
 
     ${serviceBadges}
     ${genreChips}
@@ -177,9 +384,9 @@ function renderDetail(payload) {
     <h3>Catalog</h3>
     <dl>
       <dt>Catalog #</dt><dd>${escapeHtml(album.catalog_number)}</dd>
-      <dt>Media</dt><dd>${escapeHtml(album.media_format)}</dd>
       <dt>Label</dt><dd>${album.label ? `<button class="labelLink" type="button" data-label="${escapeAttribute(album.label)}">${escapeHtml(album.label)}</button>` : "—"}</dd>
       <dt>Format</dt><dd>${escapeHtml(album.format)}</dd>
+      <dt>Compilation</dt><dd>${album.compilation ? "Yes" : "No"}</dd>
       <dt>Country</dt><dd>${escapeHtml(album.country)}</dd>
       <dt>Released</dt><dd>${escapeHtml(album.released)}</dd>
       <dt>Genre</dt><dd>${escapeHtml(album.genre)}</dd>
@@ -198,6 +405,9 @@ function renderDetail(payload) {
 
     ${serviceUrlForm}
   `;
+  if (MUSIC_PREVIEWS_ENABLED) {
+    updateTrackPreviewAvailability(album, appleAlbum, tracks);
+  }
 }
 
 function renderServiceBadges(services) {
@@ -254,8 +464,8 @@ function renderProviderBlocks(external) {
               </div>
               ${
                 provider.lookup_status === "matched"
-                  ? `<div class="metaLine">${provider.artist ? `<button class="artistLink inline" type="button" data-artist="${escapeAttribute(provider.artist)}">${escapeHtml(provider.artist)}</button> · ` : ""}${escapeHtml(provider.title)}${provider.url ? ` · <a href="${escapeHtml(provider.url)}" target="_blank" rel="noreferrer">open</a>` : ""}</div>
-                     ${genres.length ? `<div class="miniChips">${genres.slice(0, 10).map((name) => `<span>${escapeHtml(name)}</span>`).join("")}</div>` : ""}`
+                  ? `<div class="metaLine">${provider.artist ? `${renderArtistName(provider.artist, "inline")} · ` : ""}${escapeHtml(provider.title)}${provider.url ? ` · <a href="${escapeHtml(provider.url)}" target="_blank" rel="noreferrer">open</a>` : ""}</div>
+                     ${genres.length ? `<div class="miniChips">${genres.slice(0, 10).map((name) => `<button type="button" data-genre="${escapeAttribute(name)}">${escapeHtml(name)}</button>`).join("")}</div>` : ""}`
                   : `<div class="metaLine">${escapeHtml(provider.lookup_error || "No metadata returned")}</div>`
               }
             </section>
@@ -266,7 +476,7 @@ function renderProviderBlocks(external) {
   `;
 }
 
-function renderTracks(tracks) {
+function renderTracks(album, tracks) {
   if (!tracks.length) {
     return `<div class="emptyState">No tracklist cached for this album.</div>`;
   }
@@ -277,7 +487,19 @@ function renderTracks(tracks) {
           (track) => `
             <li>
               <span class="trackNumber">${escapeHtml(track.track_number || track.track_position)}</span>
-              <span class="trackTitle">${escapeHtml(track.title)}</span>
+              <span class="trackTitle">
+                <button
+                  class="previewButton"
+                  type="button"
+                  data-preview-track="${escapeAttribute(track.title)}"
+                  data-preview-artist="${escapeAttribute(album.artist)}"
+                  data-preview-album="${escapeAttribute(album.album_name)}"
+                  hidden
+                  aria-label="Play preview"
+                ></button>
+                <span>${renderTrackTitle(album, track.title)}</span>
+                <span class="previewMessage" role="status"></span>
+              </span>
               <span class="trackTime">${escapeHtml(formatDuration(track.length_ms))}</span>
             </li>
           `,
@@ -285,6 +507,263 @@ function renderTracks(tracks) {
         .join("")}
     </ol>
   `;
+}
+
+const addAlbumFields = [
+  { name: "timestamp", label: "Timestamp", type: "text", value: currentTimestampValue },
+  { name: "catalog_number", label: "1190_ID", type: "text" },
+  { name: "artist", label: "Artist", type: "text" },
+  { name: "album_name", label: "Album Name", type: "text" },
+  { name: "version_number", label: "Version Number", type: "text" },
+  { name: "case_broken", label: "Case Broken", type: "select", options: ["", "No", "Yes"] },
+  { name: "label_number_missing", label: "Label Number Missing", type: "text" },
+  { name: "label", label: "Label", type: "text" },
+  { name: "format", label: "Format", type: "select", value: "CD", options: ["CD", "Vinyl", "Cassette", "Digital"] },
+  { name: "compilation", label: "Compilation", type: "checkbox" },
+  { name: "country", label: "Country", type: "text" },
+  { name: "released", label: "Released", type: "text" },
+  { name: "genre", label: "Genre", type: "text" },
+  { name: "notes", label: "Notes", type: "textarea" },
+  { name: "other", label: "Other", type: "textarea" },
+];
+
+function renderAddField(field) {
+  const id = `add-${field.name}`;
+  const fieldValue = typeof field.value === "function" ? field.value() : field.value || "";
+  if (field.type === "textarea") {
+    return `
+      <label class="formField wide" for="${id}">
+        <span>${escapeHtml(field.label)}</span>
+        <textarea id="${id}" name="${field.name}"></textarea>
+      </label>
+    `;
+  }
+  if (field.type === "checkbox") {
+    return `
+      <label class="formField checkboxField" for="${id}">
+        <span>${escapeHtml(field.label)}</span>
+        <input id="${id}" name="${field.name}" type="checkbox" ${fieldValue ? "checked" : ""} />
+      </label>
+    `;
+  }
+  if (field.type === "select") {
+    return `
+      <label class="formField" for="${id}">
+        <span>${escapeHtml(field.label)}</span>
+        <select id="${id}" name="${field.name}">
+          ${(field.options || [])
+            .map((option) => `<option value="${escapeAttribute(option)}" ${option === fieldValue ? "selected" : ""}>${escapeRaw(option)}</option>`)
+            .join("")}
+        </select>
+      </label>
+    `;
+  }
+  return `
+    <label class="formField" for="${id}">
+      <span>${escapeHtml(field.label)}</span>
+      <input id="${id}" name="${field.name}" type="${escapeAttribute(field.type)}" value="${escapeAttribute(fieldValue)}" />
+    </label>
+  `;
+}
+
+function showAlbumForm(mode = "add", payload = null) {
+  const isEdit = mode === "edit";
+  const album = payload?.album || {};
+  if (!isEdit) {
+    state.selectedId = null;
+    document.querySelectorAll("tbody tr").forEach((row) => row.classList.remove("selected"));
+  }
+  addCoverDataUrl = "";
+  detailEl.scrollTop = 0;
+  detailEl.innerHTML = `
+    <form class="addAlbumForm" id="addAlbumForm" data-mode="${escapeAttribute(mode)}" ${isEdit ? `data-album-id="${escapeAttribute(album.id)}"` : ""}>
+      <h2>${isEdit ? "Edit Album" : "Add Album"}</h2>
+      ${
+        isEdit
+          ? ""
+          : `<label class="formField wide" for="add-service-url">
+              <span>Load from Music Service URL</span>
+              <div class="serviceLookupRow">
+                <input id="add-service-url" name="music_service_url" type="url" placeholder="Discogs release or master URL" />
+                <button type="button" data-load-service-url>Load</button>
+              </div>
+            </label>`
+      }
+      <p class="formMessage" data-add-message aria-live="polite"></p>
+      <div class="formGrid">
+        ${addAlbumFields.map(renderAddField).join("")}
+        <label class="formField wide" for="add-cover">
+          <span>Album Cover Image</span>
+          <input id="add-cover" name="cover" type="file" accept="image/png,image/jpeg,image/webp" />
+        </label>
+      </div>
+      <div class="coverPreview" data-cover-preview hidden></div>
+      <div class="formActions">
+        <button class="primaryButton" type="submit">${isEdit ? "Save Changes" : "Save Album"}</button>
+        <button type="button" data-cancel-add>Cancel</button>
+      </div>
+    </form>
+  `;
+  if (isEdit) {
+    populateAlbumFormFromAlbum(detailEl.querySelector(".addAlbumForm"), album);
+  }
+}
+
+function showAddAlbumForm() {
+  showAlbumForm("add");
+}
+
+function addFormValues(form) {
+  const values = {};
+  for (const field of addAlbumFields) {
+    if (field.type === "checkbox") {
+      values[field.name] = Boolean(form.elements[field.name]?.checked);
+    } else {
+      values[field.name] = form.elements[field.name]?.value?.trim() || "";
+    }
+  }
+  return values;
+}
+
+function setAddField(form, name, value, overwrite = true) {
+  const field = form.elements[name];
+  if (!field || value === null || value === undefined || value === "") return;
+  if (field.type === "checkbox") {
+    field.checked = Boolean(value);
+    return;
+  }
+  if (!overwrite && field.value.trim()) return;
+  field.value = name === "format" ? formatOptionValue(value) : value;
+}
+
+function populateAlbumFormFromAlbum(form, album) {
+  for (const field of addAlbumFields) {
+    const control = form.elements[field.name];
+    if (!control) continue;
+    if (field.type === "checkbox") {
+      control.checked = Boolean(album[field.name]);
+    } else if (album[field.name] !== null && album[field.name] !== undefined) {
+      control.value = field.name === "format" ? formatOptionValue(album[field.name]) : album[field.name];
+    }
+  }
+}
+
+function bestExternalMatch(external) {
+  const order = ["musicbrainz", "discogs", "lastfm"];
+  for (const provider of order) {
+    const match = external.find((item) => item.provider === provider && item.lookup_status === "matched");
+    if (match) return match;
+  }
+  return null;
+}
+
+function firstCoverUrl(covers) {
+  const cover = covers.find((item) => item.is_front) || covers[0];
+  return cover?.local_image_url || cover?.thumbnail_large || cover?.thumbnail_small || cover?.image_url || "";
+}
+
+function showAddCoverPreview(url) {
+  const preview = detailEl.querySelector("[data-cover-preview]");
+  if (!preview) return;
+  if (!url) {
+    preview.hidden = true;
+    preview.innerHTML = "";
+    return;
+  }
+  preview.hidden = false;
+  preview.innerHTML = renderLightboxImage("coverImage", url, "Album cover preview");
+}
+
+function populateAddFormFromBundle(form, payload) {
+  const album = payload.album || {};
+  const external = payload.external || [];
+  const match = bestExternalMatch(external) || {};
+  const values = {
+    artist: match.artist || album.artist,
+    album_name: match.title || album.album_name,
+    label: album.label,
+    compilation: album.compilation,
+    country: album.country,
+    released: album.released,
+    genre: album.genre,
+  };
+  Object.entries(values).forEach(([name, value]) => setAddField(form, name, value));
+  setAddField(form, "format", formatOptionValue(album.format), false);
+  showAddCoverPreview(firstCoverUrl(payload.cover_art || []));
+}
+
+async function updateTrackPreviewAvailability(album, appleAlbum, tracks) {
+  detailEl.dataset.applePreviewCheck = "checking";
+  delete detailEl.dataset.applePreviewError;
+  const hasAlbum = await findAppleAlbum(appleAlbum, tracks);
+  if (state.selectedId !== album.id) return;
+  detailEl.dataset.applePreviewCheck = hasAlbum ? "found" : "missing";
+  detailEl.querySelectorAll(".previewButton").forEach((button) => {
+    button.hidden = !hasAlbum;
+  });
+}
+
+async function findAppleAlbum(album, tracks) {
+  const cacheKey = albumPreviewKey(album);
+  if (albumPreviewCache.has(cacheKey)) return albumPreviewCache.get(cacheKey);
+  const trackNames = new Set(tracks.map((track) => normalizePreviewText(track.title)).filter(Boolean));
+  if (!trackNames.size) {
+    albumPreviewCache.set(cacheKey, false);
+    return false;
+  }
+
+  const params = new URLSearchParams({
+    term: albumPreviewTerm(album),
+    media: "music",
+    entity: "song",
+    limit: "25",
+    country: "US",
+  });
+  try {
+    const payload = await appleSearch(params);
+    const found = (payload.results || []).some((result) => {
+      const trackName = normalizePreviewText(result.trackName);
+      const artistScore = albumPreviewScore(result, album);
+      return result.previewUrl && (artistScore >= 100 || trackNames.has(trackName));
+    });
+    albumPreviewCache.set(cacheKey, found);
+    return found;
+  } catch {
+    detailEl.dataset.applePreviewError = "lookup failed";
+    albumPreviewCache.set(cacheKey, false);
+    return false;
+  }
+}
+
+async function findApplePreview(album, track) {
+  const cacheKey = `${album.artist}|${album.album_name}|${track.title}`;
+  if (previewCache.has(cacheKey)) return previewCache.get(cacheKey);
+
+  let best = { score: -1, previewUrl: "" };
+  for (const term of previewSearchTerms(album, track)) {
+    const params = new URLSearchParams({
+      term,
+      media: "music",
+      entity: "song",
+      limit: "25",
+      country: "US",
+    });
+    try {
+      const payload = await appleSearch(params);
+      for (const result of payload.results || []) {
+        const score = previewScore(result, album, track);
+        if (score > best.score) {
+          best = { score, previewUrl: result.previewUrl || "" };
+        }
+      }
+      if (best.score >= 170) break;
+    } catch {
+      continue;
+    }
+  }
+  const previewUrl = best.score >= 60 ? best.previewUrl : "";
+  previewCache.set(cacheKey, previewUrl);
+  return previewUrl;
 }
 
 function renderArtistBlock(artist) {
@@ -379,17 +858,13 @@ searchForm.addEventListener("submit", (event) => {
   loadAlbums();
 });
 
-enrichedFilter.addEventListener("change", () => {
-  state.enriched = enrichedFilter.value;
-  state.offset = 0;
-  loadAlbums();
-});
-
 hideNaInput.addEventListener("change", () => {
   state.hideNa = hideNaInput.checked;
   state.offset = 0;
   loadAlbums();
 });
+
+addAlbumButton.addEventListener("click", showAddAlbumForm);
 
 rowsEl.addEventListener("click", (event) => {
   const artistButton = event.target.closest("[data-artist]");
@@ -409,6 +884,36 @@ rowsEl.addEventListener("click", (event) => {
 });
 
 detailEl.addEventListener("click", (event) => {
+  const previewButton = event.target.closest("[data-preview-track]");
+  if (previewButton) {
+    if (!MUSIC_PREVIEWS_ENABLED) return;
+    togglePreview(previewButton);
+    return;
+  }
+  const loadServiceButton = event.target.closest("[data-load-service-url]");
+  if (loadServiceButton) {
+    loadServiceUrlIntoAddForm(loadServiceButton.closest(".addAlbumForm"));
+    return;
+  }
+  const editButton = event.target.closest("[data-edit-album]");
+  if (editButton && currentDetailPayload) {
+    showAlbumForm("edit", currentDetailPayload);
+    return;
+  }
+  const deleteButton = event.target.closest("[data-delete-album]");
+  if (deleteButton && currentDetailPayload) {
+    deleteAlbum(Number(deleteButton.dataset.deleteAlbum));
+    return;
+  }
+  const cancelAdd = event.target.closest("[data-cancel-add]");
+  if (cancelAdd) {
+    if (currentDetailPayload?.album?.id) {
+      renderDetail(currentDetailPayload);
+    } else {
+      detailEl.innerHTML = `<div class="emptyState">Select an album to see catalog notes and music service metadata.</div>`;
+    }
+    return;
+  }
   const bioToggle = event.target.closest("[data-bio-toggle]");
   if (bioToggle) {
     const profile = bioToggle.closest(".artistProfile");
@@ -448,6 +953,83 @@ detailEl.addEventListener("click", (event) => {
   loadAlbums();
 });
 
+detailEl.addEventListener("change", (event) => {
+  const input = event.target.closest(".addAlbumForm input[type='file'][name='cover']");
+  if (!input) return;
+  const file = input.files?.[0];
+  addCoverDataUrl = "";
+  if (!file) {
+    showAddCoverPreview("");
+    return;
+  }
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    const message = detailEl.querySelector("[data-add-message]");
+    if (message) message.textContent = "Cover image must be a JPEG, PNG, or WebP file.";
+    input.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    addCoverDataUrl = String(reader.result || "");
+    showAddCoverPreview(addCoverDataUrl);
+  });
+  reader.readAsDataURL(file);
+});
+
+function resetPreviewButton(button) {
+  if (!button) return;
+  button.classList.remove("playing");
+  button.classList.remove("loading");
+  button.setAttribute("aria-label", "Play preview");
+}
+
+async function togglePreview(button) {
+  if (button.classList.contains("unavailable") || button.classList.contains("loading")) return;
+  if (previewState.button === button && !previewState.audio.paused) {
+    previewState.audio.pause();
+    resetPreviewButton(button);
+    return;
+  }
+
+  let previewUrl = button.dataset.previewUrl || "";
+  if (!previewUrl) {
+    const message = button.parentElement?.querySelector(".previewMessage");
+    button.classList.add("loading");
+    button.setAttribute("aria-label", "Loading preview");
+    if (message) message.textContent = "";
+    previewUrl = await findApplePreview(
+      { artist: button.dataset.previewArtist || "", album_name: button.dataset.previewAlbum || "" },
+      { title: button.dataset.previewTrack || "" },
+    );
+    button.classList.remove("loading");
+    if (!previewUrl) {
+      button.classList.add("unavailable");
+      button.setAttribute("aria-label", "Preview unavailable");
+      if (message) message.textContent = "Preview unavailable";
+      return;
+    }
+    button.dataset.previewUrl = previewUrl;
+  }
+
+  resetPreviewButton(previewState.button);
+  previewState.button = button;
+  previewState.audio.src = previewUrl;
+  previewState.audio.loop = false;
+  button.classList.add("playing");
+  button.setAttribute("aria-label", "Pause preview");
+  try {
+    await previewState.audio.play();
+  } catch {
+    resetPreviewButton(button);
+  }
+}
+
+previewState.audio.addEventListener("ended", () => resetPreviewButton(previewState.button));
+previewState.audio.addEventListener("pause", () => {
+  if (previewState.audio.ended) return;
+  resetPreviewButton(previewState.button);
+});
+
 statsEl.addEventListener("click", (event) => {
   const button = event.target.closest("#tagCloudButton");
   if (!button) return;
@@ -455,6 +1037,12 @@ statsEl.addEventListener("click", (event) => {
 });
 
 detailEl.addEventListener("submit", async (event) => {
+  const addForm = event.target.closest(".addAlbumForm");
+  if (addForm) {
+    event.preventDefault();
+    saveAddedAlbum(addForm);
+    return;
+  }
   const form = event.target.closest(".serviceUrlForm");
   if (!form) return;
   event.preventDefault();
@@ -480,6 +1068,98 @@ detailEl.addEventListener("submit", async (event) => {
     button.disabled = false;
   }
 });
+
+async function loadServiceUrlIntoAddForm(form) {
+  if (!form) return;
+  const message = form.querySelector("[data-add-message]");
+  const button = form.querySelector("[data-load-service-url]");
+  const serviceUrl = form.elements.music_service_url.value.trim();
+  if (!serviceUrl) {
+    message.textContent = "Enter a Discogs release or master URL.";
+    return;
+  }
+  message.textContent = "Looking up Discogs data...";
+  button.disabled = true;
+  try {
+    const current = addFormValues(form);
+    const response = await fetch("/api/music-service-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: serviceUrl,
+        artist: current.artist,
+        album_name: current.album_name,
+        format: current.format || "CD",
+        compilation: current.compilation,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to load music service data.");
+    populateAddFormFromBundle(form, payload);
+    message.textContent = "Loaded Discogs data. Review the fields before saving.";
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveAddedAlbum(form) {
+  const message = form.querySelector("[data-add-message]");
+  const submitButton = form.querySelector("button[type='submit']");
+  const values = addFormValues(form);
+  const isEdit = form.dataset.mode === "edit";
+  const serviceUrl = form.elements.music_service_url?.value.trim() || "";
+  if (!values.artist && !values.album_name && !serviceUrl) {
+    message.textContent = "Artist, album name, or Discogs URL is required.";
+    return;
+  }
+  message.textContent = "Saving album...";
+  submitButton.disabled = true;
+  try {
+    const response = await fetch(isEdit ? `/api/albums/${form.dataset.albumId}` : "/api/albums", {
+      method: isEdit ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        album: values,
+        music_service_url: serviceUrl,
+        cover_data_url: addCoverDataUrl,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to save album.");
+    message.textContent = "Saved. Loading album...";
+    await loadStats();
+    state.offset = 0;
+    state.q = "";
+    state.tag = "";
+    state.artist = "";
+    state.label = "";
+    searchInput.value = "";
+    await loadAlbums();
+    await loadDetail(payload.album_id);
+  } catch (error) {
+    message.textContent = error.message;
+    submitButton.disabled = false;
+  }
+}
+
+async function deleteAlbum(albumId) {
+  const albumName = currentDetailPayload?.album?.album_name || "this album";
+  if (!window.confirm(`Delete ${albumName}?`)) return;
+  try {
+    const response = await fetch(`/api/albums/${albumId}`, { method: "DELETE" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to delete album.");
+    currentDetailPayload = null;
+    state.selectedId = null;
+    detailEl.innerHTML = `<div class="emptyState">Album deleted.</div>`;
+    await loadStats();
+    await loadAlbums();
+  } catch (error) {
+    detailEl.insertAdjacentHTML("afterbegin", `<p class="formMessage">${escapeHtml(error.message)}</p>`);
+  }
+}
 
 function openLightbox(imageUrl, altText) {
   if (!imageUrl) return;

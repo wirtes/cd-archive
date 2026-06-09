@@ -1,6 +1,6 @@
 # Radio 1190 Music Archive
 
-A local SQLite-backed browser for the Radio 1190 CD catalog. The app imports `data/CD Catalog.csv`, enriches catalog rows with MusicBrainz, Discogs, and Last.fm metadata, caches API responses locally, downloads usable cover/artist images, and serves a lightweight web interface at `http://127.0.0.1:8000`.
+A local SQLite-backed browser for the Radio 1190 CD catalog. The app imports `data/CD Catalog.csv`, enriches catalog rows with MusicBrainz, Discogs, and Last.fm metadata, caches API responses locally, downloads usable cover/artist images, and serves a lightweight web interface at `http://127.0.0.1:8190`.
 
 ## What It Stores
 
@@ -16,10 +16,13 @@ The master album fields currently filled from those services are:
 - `country`
 - `released`
 - `genre`
+- `compilation`
 
-`format` is catalog-supplied only. The current catalog assumes every supplied item is a CD, so rebuilds set `albums.format` from the local `media_format` value and do not update it from MusicBrainz, Discogs, or Last.fm.
+`format` is catalog-supplied only. The current catalog assumes imported spreadsheet items are CDs, and the web Add/Edit form treats `format` as the single user-facing format field. External services can be used to check whether the supplied format appears in API data, but they do not overwrite the catalog format.
 
-Every album also keeps provider-specific records so the source data remains inspectable.
+Every album keeps normalized provider records in `external_metadata`, one row per matched or attempted service. MusicBrainz, Discogs, and Last.fm are peers in that table. Some services also populate service-specific helper tables when they expose richer data; for example, `musicbrainz_metadata` stores detailed MusicBrainz release fields, and Discogs/MusicBrainz can both populate `tracks`.
+
+`Various`, `V/A`, and `VA` are normalized to the special display value `Various Artists`. Compilation rows suppress artist profile display, and compilation tracks rendered as `Artist - Song` make the track artist clickable for an artist search.
 
 ## Local Files
 
@@ -71,8 +74,26 @@ python3 app.py
 Open:
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8190
 ```
+
+The default port is `8190`. Override it with `PORT=...` if needed.
+
+## Debian Service
+
+Install and start a systemd service:
+
+```sh
+sudo scripts/install_debian_service.sh
+```
+
+Restart it after changes:
+
+```sh
+sudo scripts/restart_debian_service.sh
+```
+
+Both scripts use `SERVICE_NAME=radio1190-archive` and `PORT=8190` by default. Set `APP_DIR`, `RUN_USER`, `PYTHON_BIN`, `SERVICE_NAME`, or `PORT` before running the install script to override those values.
 
 ## Manual Music Service Matching
 
@@ -85,15 +106,35 @@ If a selected album has no matched music services, the sidebar shows a `Music Se
 
 When submitted, the supplied URL becomes the anchor match for that album. Discogs master URLs are resolved through the master record's `main_release`. The app then uses the artist/title from that service to look up the same album in the other two services, stores the results in SQLite, and refreshes the sidebar.
 
+## Add And Edit Albums
+
+Use the header `Add` button to add a new album manually. The Add form can load album data from a Discogs release or master URL only. This keeps new user-created records anchored to Discogs and avoids broad multi-service searching during entry. Existing unmatched albums can still use the sidebar `Music Service URL` field with MusicBrainz, Discogs, or Last.fm URLs.
+
+Album detail views include `Edit` and `Delete` buttons. Edit updates the catalog fields stored on `albums`; Delete removes the album and its dependent cached metadata through SQLite foreign-key cascades.
+
+The Add/Edit form includes:
+
+- Spreadsheet/catalog fields such as timestamp, `1190_ID`, artist, album title, version, case status, notes, and other.
+- Extended catalog fields: label, format, compilation, country, released, and genre.
+- Optional album cover upload.
+
+`RateYourMusic` remains stored from the original spreadsheet and appears in read-only album details, but it is not shown in Add/Edit because it is not currently used for enrichment or lookups.
+
 ## Web Features
 
 - Click an artist name to show all releases by that artist.
 - Click a genre/tag chip to filter by that tag only.
+- Click genre/style chips inside Music Services boxes to filter by that tag only.
 - Click the underlined `genres/tags` count in the header to open the tag cloud.
 - Click any tag in the tag cloud to filter by that tag only.
 - Click a record label to show all releases from that label.
 - `Hide N/A albums` defaults on and hides rows where both artist and album are `N/A`.
 - The `Music Service` column lists the services matched for each album.
+- `Add` opens the Add Album form.
+- Album details include `Edit` and `Delete`.
+- Compilation track artists are clickable when a track is displayed as `Artist - Song`.
+- Album covers and artist images open in a lightbox.
+- Apple/iTunes preview code is present but currently disabled.
 
 ## Database ERD
 
@@ -108,11 +149,17 @@ erDiagram
         text album_name
         text label
         text format
+        integer compilation
         text country
         text released
         text genre
         text field_sources
         text version_number
+        text case_broken
+        text label_number_missing
+        text notes
+        text rateyourmusic
+        text other
         text source_json
     }
 
@@ -214,12 +261,12 @@ erDiagram
     }
 
     ARTISTS ||--o{ ALBUMS : "matches by artist name"
-    ALBUMS ||--o| MUSICBRAINZ_METADATA : "has"
+    ALBUMS ||--o| MUSICBRAINZ_METADATA : "has MusicBrainz detail cache"
     ALBUMS ||--o{ TRACKS : "has"
     ALBUMS ||--o{ ALBUM_GENRES : "has"
     ALBUMS ||--o{ COVER_ART : "has"
     ALBUMS ||--o{ ALBUM_SERVICE_STATUS : "tracks service status"
-    ALBUMS ||--o{ EXTERNAL_METADATA : "has provider data"
+    ALBUMS ||--o{ EXTERNAL_METADATA : "has normalized service metadata"
 ```
 
 ## Data And Asset Storage
@@ -244,8 +291,10 @@ flowchart LR
     Web["web/index.html + app.js + styles.css"] --> Browser["Browser UI"]
     App --> Browser
 
-    Browser --> ManualURL["Manual Music Service URL"]
+    Browser --> ManualURL["Sidebar Music Service URL"]
+    Browser --> AddDiscogs["Add form Discogs URL"]
     ManualURL --> App
+    AddDiscogs --> App
     App --> Builder
 ```
 
@@ -254,7 +303,11 @@ flowchart LR
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/api/albums` | `GET` | List albums with optional filters: `q`, `tag`, `artist`, `label`, `hide_na`, `enriched`, `limit`, `offset`. |
+| `/api/albums` | `POST` | Create an album from Add form fields, optional Discogs URL, and optional cover upload. |
 | `/api/albums/<id>` | `GET` | Return one album, service metadata, tracks, genres, covers, and artist profile. |
+| `/api/albums/<id>` | `PUT` | Update an album from Edit form fields and optional cover upload. |
+| `/api/albums/<id>` | `DELETE` | Delete an album and dependent cached rows. |
+| `/api/music-service-preview` | `POST` | Preview Discogs release/master metadata for the Add form without creating a catalog row. |
 | `/api/albums/<id>/music-service-url` | `POST` | Submit a MusicBrainz, Discogs, or Last.fm album URL for an unmatched album. |
 | `/api/stats` | `GET` | Return high-level catalog stats. |
 | `/api/tags` | `GET` | Return tag-cloud data from cached MusicBrainz, Discogs, and Last.fm genre/tag/style records. |
@@ -263,6 +316,9 @@ flowchart LR
 
 - `api_cache` stores raw JSON responses keyed by provider and request, so routine rebuilds avoid unnecessary API calls.
 - `external_metadata` stores normalized provider records for MusicBrainz, Discogs, and Last.fm.
-- `musicbrainz_metadata` remains separate because MusicBrainz also supplies detailed track and release fields used elsewhere in the app.
+- `musicbrainz_metadata` is a service-specific detail/cache table for MusicBrainz release fields. It does not make MusicBrainz the master service model; MusicBrainz also has a normalized row in `external_metadata` like Discogs and Last.fm.
+- `tracks` can be populated from MusicBrainz or Discogs. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.
+- `album_service_status` records whether each service was found, not found, errored, or not configured.
 - Album art and artist images are stored as local files and referenced by local web paths.
+- `api_cache` prevents repeated API hits when metadata has already been downloaded.
 - The app is intended for local use and does not implement authentication.

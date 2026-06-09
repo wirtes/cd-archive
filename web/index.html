@@ -13,16 +13,14 @@
         <p id="stats">Loading catalog…</p>
       </div>
       <form id="searchForm" class="controls">
-        <input id="searchInput" type="search" placeholder="Search artist, album, or catalog #" autocomplete="off" />
-        <select id="enrichedFilter" aria-label="music service filter">
-          <option value="all">All records</option>
-          <option value="yes">With service data</option>
-          <option value="no">Without service data</option>
-        </select>
-        <label class="checkboxControl">
-          <input id="hideNaInput" type="checkbox" checked />
-          <span>Hide N/A albums</span>
-        </label>
+        <div class="searchStack">
+          <input id="searchInput" type="search" placeholder="Search artist, album, or catalog #" autocomplete="off" />
+          <label class="checkboxControl">
+            <input id="hideNaInput" type="checkbox" checked />
+            <span>Hide N/A albums</span>
+          </label>
+        </div>
+        <button id="addAlbumButton" class="addButton" type="button">Add</button>
       </form>
     </header>
 
@@ -59,6 +57,6 @@
       <img id="lightboxImage" alt="" />
     </div>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=compilation-track-links-1"></script>
   </body>
 </html>

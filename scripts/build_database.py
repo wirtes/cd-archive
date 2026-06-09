@@ -102,6 +102,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
             album_name TEXT,
             label TEXT,
             format TEXT,
+            compilation INTEGER NOT NULL DEFAULT 0,
             country TEXT,
             released TEXT,
             genre TEXT,
@@ -256,9 +257,9 @@ def import_catalog(conn: sqlite3.Connection, rows: list[dict[str, str]]) -> None
     insert_sql = """
         INSERT INTO albums (
             row_number, timestamp, catalog_number, media_format, artist, album_name,
-            label, format, country, released, genre, field_sources, version_number,
+            label, format, compilation, country, released, genre, field_sources, version_number,
             case_broken, label_number_missing, notes, rateyourmusic, other, source_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     payload = []
     for index, row in enumerate(rows, start=1):
@@ -275,6 +276,7 @@ def import_catalog(conn: sqlite3.Connection, rows: list[dict[str, str]]) -> None
                 normalized["album_name"],
                 None,
                 "cd",
+                0,
                 None,
                 None,
                 None,
@@ -446,6 +448,15 @@ def is_placeholder(value: str) -> bool:
 def is_self_titled(value: str) -> bool:
     normalized = (value or "").strip().casefold().replace(".", "")
     return normalized in {"s/t", "st", "self titled", "self-titled"}
+
+
+def normalize_artist_name(value: str | None) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\s*\(\d+\)\s*$", "", value or "")).strip()
+
+
+def is_various_artist(value: str | None) -> bool:
+    normalized = normalize_artist_name(value).casefold().replace(".", "")
+    return normalized in {"v/a", "va", "various", "various artists"}
 
 
 def first_joined(values: list[str | None]) -> str:
@@ -673,6 +684,47 @@ def unique_join(values: list[str | None], limit: int | None = None) -> str | Non
     return ", ".join(output) if output else None
 
 
+def value_from_mapping_or_string(value, key: str | None = None) -> str | None:
+    if isinstance(value, dict):
+        if key:
+            return value.get(key)
+        return value.get("name") or value.get("title") or value.get("uri") or value.get("resource_url")
+    if value:
+        return str(value)
+    return None
+
+
+def listify(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def discogs_is_compilation(payload: dict) -> bool:
+    if is_various_artist(payload.get("artists_sort")):
+        return True
+    for artist in payload.get("artists") or []:
+        if is_various_artist(value_from_mapping_or_string(artist, "name")):
+            return True
+    track_artists = {
+        normalize_artist_name(value_from_mapping_or_string(artist, "name")).casefold()
+        for track in flatten_discogs_tracks(payload.get("tracklist") or [])
+        for artist in (track.get("artists") or [])
+        if value_from_mapping_or_string(artist, "name")
+    }
+    if len(track_artists) > 1:
+        return True
+    for fmt in payload.get("formats") or []:
+        if not isinstance(fmt, dict):
+            continue
+        values = [fmt.get("name"), *(fmt.get("descriptions") or [])]
+        if any(str(value or "").casefold() == "compilation" for value in values):
+            return True
+    return False
+
+
 def musicbrainz_genre_names(conn: sqlite3.Connection, album_id: int) -> list[str]:
     rows = conn.execute(
         """
@@ -725,29 +777,35 @@ def discogs_master_fields(row: sqlite3.Row | None) -> dict[str, str | None]:
     raw = json.loads(row["raw_json"] or "{}")
     detail = raw.get("detail") or {}
     labels = detail.get("labels") or []
+    label_names = []
+    for label in labels:
+        label_names.append(value_from_mapping_or_string(label, "name"))
     return {
-        "label": unique_join([label.get("name") for label in labels]),
+        "label": unique_join(label_names),
         "country": detail.get("country"),
         "released": detail.get("released") or detail.get("released_formatted"),
         "genre": unique_join(json_list(row["genres"]) + json_list(row["styles"]), limit=6),
+        "compilation": discogs_is_compilation(detail),
     }
 
 
 def lastfm_master_fields(row: sqlite3.Row | None) -> dict[str, str | None]:
     if not row or row["lookup_status"] != "matched":
         return {}
-    return {"genre": unique_join(json_list(row["genres"]), limit=6)}
+    return {"genre": unique_join(json_list(row["genres"]), limit=6), "compilation": is_various_artist(row["artist"])}
 
 
 def musicbrainz_master_fields(conn: sqlite3.Connection, album_id: int) -> dict[str, str | None]:
     row = conn.execute("SELECT * FROM musicbrainz_metadata WHERE album_id = ?", (album_id,)).fetchone()
     if not row or row["lookup_status"] != "matched":
         return {}
+    secondary_types = json_list(row["release_group_secondary_types"])
     return {
         "label": row["label_names"],
         "country": row["country"],
         "released": row["date"],
         "genre": unique_join(musicbrainz_genre_names(conn, album_id), limit=6),
+        "compilation": any(value.casefold() == "compilation" for value in secondary_types) or is_various_artist(row["artist_credit"]),
     }
 
 
@@ -764,22 +822,22 @@ def update_master_catalog_fields(conn: sqlite3.Connection, album_id: int) -> Non
         ("discogs", discogs_master_fields(external_rows.get("discogs"))),
         ("lastfm", lastfm_master_fields(external_rows.get("lastfm"))),
     ]
-    resolved: dict[str, str | None] = {}
+    resolved: dict[str, str | int | bool | None] = {}
     provenance: dict[str, str] = {}
-    for field in ("label", "country", "released", "genre"):
+    for field in ("label", "country", "released", "genre", "compilation"):
         for provider, values in sources:
             value = values.get(field)
-            if value:
+            if value is not None and value != "":
                 resolved[field] = value
                 provenance[field] = provider
                 break
         else:
-            resolved[field] = None
+            resolved[field] = 0 if field == "compilation" else None
 
     conn.execute(
         """
         UPDATE albums
-        SET label = ?, country = ?, released = ?, genre = ?, field_sources = ?
+        SET label = ?, country = ?, released = ?, genre = ?, compilation = ?, field_sources = ?
         WHERE id = ?
         """,
         (
@@ -787,6 +845,7 @@ def update_master_catalog_fields(conn: sqlite3.Connection, album_id: int) -> Non
             resolved["country"],
             resolved["released"],
             resolved["genre"],
+            1 if resolved["compilation"] else 0,
             json.dumps(provenance, ensure_ascii=False),
             album_id,
         ),
@@ -1241,7 +1300,11 @@ def upsert_discogs_release(conn: sqlite3.Connection, album_id: int, payload: dic
     selected = selected or payload
     discogs_id = payload.get("id") or selected.get("id")
     cover_url = discogs_cover_url(payload, selected)
-    artist = first_joined([artist.get("name") for artist in payload.get("artists", [])]) if payload.get("artists") else None
+    artist_names = []
+    for artist_entry in payload.get("artists") or []:
+        artist_names.append(value_from_mapping_or_string(artist_entry, "name"))
+    is_compilation = discogs_is_compilation(payload) or is_various_artist(first_joined(artist_names))
+    artist = "Various Artists" if is_compilation and any(is_various_artist(name) for name in artist_names) else first_joined(artist_names)
     upsert_external_metadata(
         conn,
         album_id,
@@ -1271,14 +1334,91 @@ def upsert_discogs_release(conn: sqlite3.Connection, album_id: int, payload: dic
         url=payload.get("uri") or payload.get("resource_url"),
     )
     replace_provider_cover_art(conn, album_id, "discogs", cover_url, str(discogs_id) if discogs_id else None, payload)
+    insert_discogs_tracks_if_missing(conn, album_id, payload)
     return artist, payload.get("title")
+
+
+def duration_to_ms(value: str | None) -> int | None:
+    if not value:
+        return None
+    parts = [part for part in value.strip().split(":") if part.isdigit()]
+    if not parts:
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + int(part)
+    return seconds * 1000
+
+
+def discogs_track_artist(track: dict) -> str | None:
+    artists = [value_from_mapping_or_string(artist, "name") for artist in track.get("artists") or []]
+    return first_joined([normalize_artist_name(artist) for artist in artists if artist])
+
+
+def flatten_discogs_tracks(tracklist: list[dict]) -> list[dict]:
+    tracks = []
+    for item in tracklist:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type_") == "heading":
+            tracks.extend(flatten_discogs_tracks(item.get("sub_tracks") or []))
+            continue
+        if item.get("type_") != "track":
+            continue
+        tracks.append(item)
+        tracks.extend(flatten_discogs_tracks(item.get("sub_tracks") or []))
+    return tracks
+
+
+def insert_discogs_tracks_if_missing(conn: sqlite3.Connection, album_id: int, payload: dict) -> int:
+    existing = conn.execute("SELECT COUNT(*) FROM tracks WHERE album_id = ?", (album_id,)).fetchone()[0]
+    if existing:
+        return 0
+    tracklist = flatten_discogs_tracks(payload.get("tracklist") or [])
+    rows = []
+    for index, track in enumerate(tracklist, start=1):
+        title = track.get("title")
+        artist = discogs_track_artist(track)
+        display_title = f"{artist} - {title}" if artist and title else title
+        if not display_title:
+            continue
+        rows.append(
+            (
+                album_id,
+                1,
+                "",
+                payload.get("format") or "CD",
+                index,
+                track.get("position") or str(index),
+                display_title,
+                duration_to_ms(track.get("duration")),
+                f"discogs:{payload.get('id')}:{track.get('position') or index}",
+            )
+        )
+    if not rows:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO tracks (
+            album_id, medium_position, medium_title, medium_format, track_position,
+            track_number, title, length_ms, recording_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    return len(rows)
 
 
 def discogs_cover_url(payload: dict, selected: dict) -> str | None:
     images = payload.get("images") or []
-    front = next((image for image in images if image.get("type") == "primary"), None)
+    front = next((image for image in images if isinstance(image, dict) and image.get("type") == "primary"), None)
     image = front or (images[0] if images else {})
-    return image.get("uri") or image.get("resource_url") or payload.get("thumb") or selected.get("cover_image")
+    return (
+        value_from_mapping_or_string(image, "uri")
+        or value_from_mapping_or_string(image, "resource_url")
+        or payload.get("thumb")
+        or selected.get("cover_image")
+    )
 
 
 def fetch_lastfm(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> None:
@@ -1330,9 +1470,15 @@ def upsert_lastfm_album(
     error: str | None,
     raw: dict | None = None,
 ) -> tuple[str | None, str | None]:
-    tags = [tag.get("name") for tag in ((album.get("tags") or {}).get("tag") or []) if tag.get("name")]
-    images = album.get("image") or []
-    cover_url = next((image.get("#text") for image in reversed(images) if image.get("#text")), None)
+    tag_items = listify((album.get("tags") or {}).get("tag"))
+    tags = [
+        value_from_mapping_or_string(tag, "name")
+        for tag in tag_items
+        if value_from_mapping_or_string(tag, "name")
+    ]
+    images = listify(album.get("image"))
+    cover_url = next((value_from_mapping_or_string(image, "#text") for image in reversed(images) if value_from_mapping_or_string(image, "#text")), None)
+    tracks = listify((album.get("tracks") or {}).get("track"))
     upsert_external_metadata(
         conn,
         album_id,
@@ -1347,7 +1493,7 @@ def upsert_lastfm_album(
             "artist": album.get("artist"),
             "genres": json.dumps(tags, ensure_ascii=False),
             "styles": None,
-            "track_count": len(((album.get("tracks") or {}).get("track") or [])),
+            "track_count": len(tracks),
             "cover_url": cover_url,
             "raw_json": json.dumps(raw or {}, ensure_ascii=False),
         },
@@ -1546,6 +1692,39 @@ def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, servi
             fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache)
 
     fetch_lastfm_artist(conn, anchor_artist or album["artist"], refresh_cache)
+    update_master_catalog_fields(conn, album_id)
+    services = conn.execute(
+        """
+        SELECT provider, lookup_status, found, external_id, title, url, lookup_error
+        FROM album_service_status
+        WHERE album_id = ?
+        ORDER BY CASE provider
+            WHEN 'musicbrainz' THEN 1
+            WHEN 'discogs' THEN 2
+            WHEN 'lastfm' THEN 3
+            ELSE 4
+        END, provider
+        """,
+        (album_id,),
+    ).fetchall()
+    return {"provider": provider, "artist": anchor_artist, "album_name": anchor_title, "services": [dict(row) for row in services]}
+
+
+def enrich_album_from_discogs_url(conn: sqlite3.Connection, album_id: int, service_url: str, refresh_cache: bool = False) -> dict:
+    load_dotenv()
+    album = conn.execute("SELECT artist, album_name FROM albums WHERE id = ?", (album_id,)).fetchone()
+    if not album:
+        raise ValueError("Album not found.")
+
+    provider, data = parse_music_service_url(service_url)
+    if provider != "discogs":
+        raise ValueError("Add Album can only load Discogs release or master URLs.")
+
+    if data.get("master_id"):
+        anchor_artist, anchor_title = fetch_discogs_master_id(conn, album_id, data["master_id"], refresh_cache)
+    else:
+        anchor_artist, anchor_title = fetch_discogs_release_id(conn, album_id, data["release_id"], refresh_cache)
+
     update_master_catalog_fields(conn, album_id)
     services = conn.execute(
         """
