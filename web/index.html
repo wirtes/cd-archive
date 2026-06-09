@@ -14,13 +14,13 @@
       </div>
       <form id="searchForm" class="controls">
         <input id="searchInput" type="search" placeholder="Search artist, album, or catalog #" autocomplete="off" />
-        <select id="enrichedFilter" aria-label="MusicBrainz filter">
+        <select id="enrichedFilter" aria-label="music service filter">
           <option value="all">All records</option>
-          <option value="yes">MusicBrainz only</option>
-          <option value="no">Unmatched only</option>
+          <option value="yes">With service data</option>
+          <option value="no">Without service data</option>
         </select>
         <label class="checkboxControl">
-          <input id="hideNaInput" type="checkbox" />
+          <input id="hideNaInput" type="checkbox" checked />
           <span>Hide N/A albums</span>
         </label>
       </form>
@@ -35,7 +35,7 @@
                 <th>#</th>
                 <th>Artist</th>
                 <th>Album</th>
-                <th>Version</th>
+                <th>Format</th>
                 <th>Music Service</th>
               </tr>
             </thead>
@@ -50,9 +50,14 @@
       </section>
 
       <aside class="detail" id="detailPane" aria-live="polite">
-        <div class="emptyState">Select an album to see catalog notes and MusicBrainz metadata.</div>
+        <div class="emptyState">Select an album to see catalog notes and music service metadata.</div>
       </aside>
     </main>
+
+    <div class="lightbox" id="imageLightbox" hidden>
+      <button class="lightboxClose" id="lightboxClose" type="button" aria-label="Close image">×</button>
+      <img id="lightboxImage" alt="" />
+    </div>
 
     <script src="/app.js"></script>
   </body>

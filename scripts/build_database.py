@@ -4,7 +4,9 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import sqlite3
+import struct
 import time
 import urllib.error
 import urllib.parse
@@ -16,10 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CSV_PATH = ROOT / "data" / "CD Catalog.csv"
 DB_PATH = ROOT / "data" / "cd_catalog.sqlite"
 COVER_DIR = ROOT / "web" / "covers"
+ARTIST_IMAGE_DIR = ROOT / "web" / "artist-images"
 
 USER_AGENT = "cd-archive/1.0 (local catalog enrichment; https://musicbrainz.org/doc/MusicBrainz_API)"
 MUSICBRAINZ_DELAY_SECONDS = 1.1
 ENV_PATH = ROOT / ".env"
+LASTFM_PLACEHOLDER_IMAGE_ID = "2a96cbd8b46e442fc41c2b86b821562f"
 
 
 SOURCE_COLUMNS = [
@@ -74,6 +78,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS album_genres;
         DROP TABLE IF EXISTS tracks;
         DROP TABLE IF EXISTS musicbrainz_metadata;
+        DROP TABLE IF EXISTS artists;
         DROP TABLE IF EXISTS albums;
 
         CREATE TABLE IF NOT EXISTS api_cache (
@@ -95,6 +100,12 @@ def create_schema(conn: sqlite3.Connection) -> None:
             media_format TEXT NOT NULL DEFAULT 'cd',
             artist TEXT,
             album_name TEXT,
+            label TEXT,
+            format TEXT,
+            country TEXT,
+            released TEXT,
+            genre TEXT,
+            field_sources TEXT,
             version_number TEXT,
             case_broken TEXT,
             label_number_missing TEXT,
@@ -102,6 +113,21 @@ def create_schema(conn: sqlite3.Connection) -> None:
             rateyourmusic TEXT,
             other TEXT,
             source_json TEXT NOT NULL
+        );
+
+        CREATE TABLE artists (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            lookup_status TEXT NOT NULL,
+            lookup_error TEXT,
+            fetched_at TEXT NOT NULL,
+            lastfm_mbid TEXT,
+            lastfm_url TEXT,
+            bio_summary TEXT,
+            bio_content TEXT,
+            image_url TEXT,
+            local_image_url TEXT,
+            raw_json TEXT
         );
 
         CREATE TABLE musicbrainz_metadata (
@@ -209,6 +235,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX idx_albums_artist ON albums(artist);
         CREATE INDEX idx_albums_album_name ON albums(album_name);
+        CREATE INDEX idx_artists_name ON artists(name);
         CREATE INDEX idx_musicbrainz_release ON musicbrainz_metadata(mb_release_id);
         CREATE INDEX idx_tracks_album ON tracks(album_id);
         CREATE INDEX idx_genres_album ON album_genres(album_id);
@@ -228,9 +255,10 @@ def read_catalog_rows(csv_path: Path) -> list[dict[str, str]]:
 def import_catalog(conn: sqlite3.Connection, rows: list[dict[str, str]]) -> None:
     insert_sql = """
         INSERT INTO albums (
-            row_number, timestamp, catalog_number, media_format, artist, album_name, version_number,
+            row_number, timestamp, catalog_number, media_format, artist, album_name,
+            label, format, country, released, genre, field_sources, version_number,
             case_broken, label_number_missing, notes, rateyourmusic, other, source_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     payload = []
     for index, row in enumerate(rows, start=1):
@@ -245,6 +273,12 @@ def import_catalog(conn: sqlite3.Connection, rows: list[dict[str, str]]) -> None
                 "cd",
                 normalized["artist"],
                 normalized["album_name"],
+                None,
+                "cd",
+                None,
+                None,
+                None,
+                json.dumps({}, ensure_ascii=False),
                 normalized["version_number"],
                 normalized["case_broken"],
                 normalized["label_number_missing"],
@@ -453,9 +487,9 @@ def release_to_metadata(release: dict | None, raw: dict, status: str, error: str
         "release_group_id": release_group.get("id"),
         "release_group_primary_type": release_group.get("primary-type"),
         "release_group_secondary_types": json.dumps(release_group.get("secondary-types") or []),
-        "label_names": first_joined([(info.get("label") or {}).get("name") for info in label_info]),
-        "catalog_numbers": first_joined([info.get("catalog-number") for info in label_info]),
-        "format": first_joined([medium.get("format") for medium in media]),
+        "label_names": unique_join([(info.get("label") or {}).get("name") for info in label_info]),
+        "catalog_numbers": unique_join([info.get("catalog-number") for info in label_info]),
+        "format": unique_join([medium.get("format") for medium in media]),
         "track_count": track_count,
         "score": release.get("score"),
         "disambiguation": release.get("disambiguation"),
@@ -610,6 +644,155 @@ def replace_musicbrainz_genres(conn: sqlite3.Connection, album_id: int, release:
     return len(genre_rows)
 
 
+def json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except json.JSONDecodeError:
+        pass
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def unique_join(values: list[str | None], limit: int | None = None) -> str | None:
+    output = []
+    seen = set()
+    for value in values:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(cleaned)
+        if limit and len(output) >= limit:
+            break
+    return ", ".join(output) if output else None
+
+
+def musicbrainz_genre_names(conn: sqlite3.Connection, album_id: int) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT name
+        FROM album_genres
+        WHERE album_id = ? AND source = ?
+        ORDER BY COALESCE(count, 0) DESC, name
+        """,
+        (album_id, "musicbrainz_genre"),
+    ).fetchall()
+    if not rows:
+        rows = conn.execute(
+            """
+            SELECT name
+            FROM album_genres
+            WHERE album_id = ? AND source = ?
+            ORDER BY COALESCE(count, 0) DESC, name
+            """,
+            (album_id, "musicbrainz_tag"),
+        ).fetchall()
+    return [row["name"] for row in rows]
+
+
+def upsert_musicbrainz_external_metadata(conn: sqlite3.Connection, album_id: int, metadata: dict) -> None:
+    genres = musicbrainz_genre_names(conn, album_id)
+    upsert_external_metadata(
+        conn,
+        album_id,
+        {
+            "provider": "musicbrainz",
+            "lookup_status": metadata.get("lookup_status"),
+            "lookup_error": metadata.get("lookup_error"),
+            "fetched_at": metadata.get("fetched_at") or utc_now(),
+            "external_id": metadata.get("mb_release_id"),
+            "url": metadata.get("mb_url"),
+            "title": metadata.get("title"),
+            "artist": metadata.get("artist_credit"),
+            "genres": json.dumps(genres, ensure_ascii=False),
+            "styles": None,
+            "track_count": metadata.get("track_count"),
+            "cover_url": None,
+            "raw_json": metadata.get("raw_json"),
+        },
+    )
+
+
+def discogs_master_fields(row: sqlite3.Row | None) -> dict[str, str | None]:
+    if not row or row["lookup_status"] != "matched":
+        return {}
+    raw = json.loads(row["raw_json"] or "{}")
+    detail = raw.get("detail") or {}
+    labels = detail.get("labels") or []
+    return {
+        "label": unique_join([label.get("name") for label in labels]),
+        "country": detail.get("country"),
+        "released": detail.get("released") or detail.get("released_formatted"),
+        "genre": unique_join(json_list(row["genres"]) + json_list(row["styles"]), limit=6),
+    }
+
+
+def lastfm_master_fields(row: sqlite3.Row | None) -> dict[str, str | None]:
+    if not row or row["lookup_status"] != "matched":
+        return {}
+    return {"genre": unique_join(json_list(row["genres"]), limit=6)}
+
+
+def musicbrainz_master_fields(conn: sqlite3.Connection, album_id: int) -> dict[str, str | None]:
+    row = conn.execute("SELECT * FROM musicbrainz_metadata WHERE album_id = ?", (album_id,)).fetchone()
+    if not row or row["lookup_status"] != "matched":
+        return {}
+    return {
+        "label": row["label_names"],
+        "country": row["country"],
+        "released": row["date"],
+        "genre": unique_join(musicbrainz_genre_names(conn, album_id), limit=6),
+    }
+
+
+def update_master_catalog_fields(conn: sqlite3.Connection, album_id: int) -> None:
+    external_rows = {
+        row["provider"]: row
+        for row in conn.execute(
+            "SELECT * FROM external_metadata WHERE album_id = ?",
+            (album_id,),
+        ).fetchall()
+    }
+    sources = [
+        ("musicbrainz", musicbrainz_master_fields(conn, album_id)),
+        ("discogs", discogs_master_fields(external_rows.get("discogs"))),
+        ("lastfm", lastfm_master_fields(external_rows.get("lastfm"))),
+    ]
+    resolved: dict[str, str | None] = {}
+    provenance: dict[str, str] = {}
+    for field in ("label", "country", "released", "genre"):
+        for provider, values in sources:
+            value = values.get(field)
+            if value:
+                resolved[field] = value
+                provenance[field] = provider
+                break
+        else:
+            resolved[field] = None
+
+    conn.execute(
+        """
+        UPDATE albums
+        SET label = ?, country = ?, released = ?, genre = ?, field_sources = ?
+        WHERE id = ?
+        """,
+        (
+            resolved["label"],
+            resolved["country"],
+            resolved["released"],
+            resolved["genre"],
+            json.dumps(provenance, ensure_ascii=False),
+            album_id,
+        ),
+    )
+
+
 def fetch_cover_art(conn: sqlite3.Connection, album_id: int, mb_release_id: str | None, refresh_cache: bool) -> int:
     conn.execute("DELETE FROM cover_art WHERE album_id = ? AND source = 'cover_art_archive'", (album_id,))
     if not mb_release_id:
@@ -728,6 +911,120 @@ def download_cover_image(source_id: str, image_id: str, image_url: str | None, r
         return None
 
 
+def download_artist_image(artist_name: str, image_url: str | None, refresh_cache: bool) -> str | None:
+    if not image_url:
+        return None
+    ARTIST_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    parsed = urllib.parse.urlparse(image_url)
+    suffix = Path(parsed.path).suffix
+    if suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+        suffix = ".jpg"
+    safe_name = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in artist_name)
+    output_path = ARTIST_IMAGE_DIR / f"{safe_name}{suffix}"
+    if output_path.exists() and not refresh_cache:
+        if is_usable_artist_image(output_path):
+            return f"/artist-images/{output_path.name}"
+        output_path.unlink(missing_ok=True)
+
+    request = urllib.request.Request(image_url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            output_path.write_bytes(response.read())
+        if not is_usable_artist_image(output_path):
+            output_path.unlink(missing_ok=True)
+            return None
+        return f"/artist-images/{output_path.name}"
+    except urllib.error.URLError:
+        return None
+
+
+def image_dimensions(path: Path) -> tuple[int, int] | None:
+    try:
+        with path.open("rb") as file:
+            header = file.read(24)
+            if header.startswith(b"\x89PNG\r\n\x1a\n") and len(header) >= 24:
+                return struct.unpack(">II", header[16:24])
+            if header.startswith(b"\xff\xd8"):
+                file.seek(2)
+                while True:
+                    marker_start = file.read(1)
+                    if not marker_start:
+                        return None
+                    if marker_start != b"\xff":
+                        continue
+                    marker = file.read(1)
+                    while marker == b"\xff":
+                        marker = file.read(1)
+                    if marker in {b"\xc0", b"\xc1", b"\xc2", b"\xc3", b"\xc5", b"\xc6", b"\xc7", b"\xc9", b"\xca", b"\xcb", b"\xcd", b"\xce", b"\xcf"}:
+                        file.read(3)
+                        height, width = struct.unpack(">HH", file.read(4))
+                        return width, height
+                    length_bytes = file.read(2)
+                    if len(length_bytes) != 2:
+                        return None
+                    length = struct.unpack(">H", length_bytes)[0]
+                    file.seek(max(length - 2, 0), 1)
+    except OSError:
+        return None
+    return None
+
+
+def is_usable_artist_image(path: Path) -> bool:
+    dimensions = image_dimensions(path)
+    if not dimensions:
+        return path.stat().st_size > 4096
+    width, height = dimensions
+    return width >= 120 and height >= 120
+
+
+def existing_artist_image_url(artist_name: str) -> str | None:
+    safe_name = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in artist_name)
+    for suffix in (".jpg", ".jpeg", ".png", ".webp"):
+        output_path = ARTIST_IMAGE_DIR / f"{safe_name}{suffix}"
+        if output_path.exists() and is_usable_artist_image(output_path):
+            return f"/artist-images/{output_path.name}"
+    return None
+
+
+def is_lastfm_placeholder_image(image_url: str | None) -> bool:
+    return bool(image_url and LASTFM_PLACEHOLDER_IMAGE_ID in image_url)
+
+
+def best_lastfm_image_url(images: list[dict]) -> str | None:
+    size_rank = {"mega": 6, "extralarge": 5, "large": 4, "medium": 3, "small": 2, "": 1}
+    candidates = sorted(
+        (image for image in images if image.get("#text") and not is_lastfm_placeholder_image(image.get("#text"))),
+        key=lambda image: size_rank.get(image.get("size", ""), 0),
+        reverse=True,
+    )
+    return candidates[0].get("#text") if candidates else None
+
+
+def fetch_lastfm_artist_page_image(artist: str) -> str | None:
+    url = f"https://www.last.fm/music/{urllib.parse.quote_plus(artist)}"
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            html = response.read().decode("utf-8", errors="ignore")
+    except urllib.error.URLError:
+        return None
+
+    candidates = re.findall(
+        r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)["\']',
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    for token in html.split('"'):
+        if "lastfm.freetls.fastly.net/i/u/" in token:
+            candidates.append(token)
+
+    for candidate in candidates:
+        if candidate.startswith("https://") and not is_lastfm_placeholder_image(candidate):
+            return candidate
+    return None
+
+
 def upsert_external_metadata(conn: sqlite3.Connection, album_id: int, metadata: dict) -> None:
     columns = [
         "album_id",
@@ -758,7 +1055,108 @@ def upsert_external_metadata(conn: sqlite3.Connection, album_id: int, metadata: 
     )
 
 
+def upsert_artist(conn: sqlite3.Connection, metadata: dict) -> None:
+    columns = [
+        "name",
+        "lookup_status",
+        "lookup_error",
+        "fetched_at",
+        "lastfm_mbid",
+        "lastfm_url",
+        "bio_summary",
+        "bio_content",
+        "image_url",
+        "local_image_url",
+        "raw_json",
+    ]
+    values = [metadata.get(column) for column in columns]
+    placeholders = ", ".join("?" for _ in columns)
+    updates = ", ".join(f"{column}=excluded.{column}" for column in columns[1:])
+    conn.execute(
+        f"""
+        INSERT INTO artists ({", ".join(columns)})
+        VALUES ({placeholders})
+        ON CONFLICT(name) DO UPDATE SET {updates}
+        """,
+        values,
+    )
+
+
+def fetch_lastfm_artist(conn: sqlite3.Connection, artist: str, refresh_cache: bool) -> None:
+    artist = (artist or "").strip()
+    if is_placeholder(artist):
+        return
+
+    existing = conn.execute("SELECT image_url, local_image_url FROM artists WHERE name = ?", (artist,)).fetchone()
+    api_key = os.environ.get("LASTFM_API_KEY", "").strip()
+    if not api_key:
+        upsert_artist(
+            conn,
+            {
+                "name": artist,
+                "lookup_status": "not_configured",
+                "lookup_error": "Set LASTFM_API_KEY to enable Last.fm artist enrichment.",
+                "fetched_at": utc_now(),
+            },
+        )
+        return
+
+    params = urllib.parse.urlencode(
+        {
+            "method": "artist.getinfo",
+            "artist": artist,
+            "api_key": api_key,
+            "format": "json",
+        }
+    )
+    url = f"https://ws.audioscrobbler.com/2.0/?{params}"
+    payload, _, error = cached_json(conn, "lastfm", f"artist:{artist}", url, refresh_cache=refresh_cache)
+    artist_payload = (payload or {}).get("artist") or {}
+    status = "matched" if artist_payload else ("not_found" if not error or error == "not found" else "error")
+    images = artist_payload.get("image") or []
+    image_url = best_lastfm_image_url(images)
+    if not image_url and artist_payload:
+        image_url = fetch_lastfm_artist_page_image(artist)
+    local_image_url = (
+        existing["local_image_url"]
+        if existing
+        and existing["local_image_url"]
+        and not is_lastfm_placeholder_image(existing["image_url"])
+        and not refresh_cache
+        else None
+    )
+    if not local_image_url and not refresh_cache:
+        local_image_url = existing_artist_image_url(artist)
+    if not local_image_url and image_url:
+        local_image_url = download_artist_image(artist, image_url, refresh_cache)
+    bio = artist_payload.get("bio") or {}
+
+    upsert_artist(
+        conn,
+        {
+            "name": artist,
+            "lookup_status": status,
+            "lookup_error": error,
+            "fetched_at": utc_now(),
+            "lastfm_mbid": artist_payload.get("mbid"),
+            "lastfm_url": artist_payload.get("url"),
+            "bio_summary": bio.get("summary"),
+            "bio_content": bio.get("content"),
+            "image_url": image_url,
+            "local_image_url": local_image_url,
+            "raw_json": json.dumps(payload or {}, ensure_ascii=False),
+        },
+    )
+
+
 def fetch_discogs(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> None:
+    existing = conn.execute(
+        "SELECT lookup_status FROM external_metadata WHERE album_id = ? AND provider = ?",
+        (album_id, "discogs"),
+    ).fetchone()
+    if existing and existing["lookup_status"] == "matched" and not refresh_cache:
+        return
+
     token = os.environ.get("DISCOGS_TOKEN", "").strip()
     if not token:
         upsert_external_metadata(
@@ -776,35 +1174,74 @@ def fetch_discogs(conn: sqlite3.Connection, album_id: int, artist: str, album_na
 
     query = f"{artist} {album_name}".strip()
     headers = {"Authorization": f"Discogs token={token}"}
-    params = urllib.parse.urlencode({"q": query, "type": "release", "format": "CD", "per_page": "1"})
-    search_url = f"https://api.discogs.com/database/search?{params}"
-    search_payload, _, search_error = cached_json(conn, "discogs", f"search:{query}", search_url, headers=headers, refresh_cache=refresh_cache)
-    results = (search_payload or {}).get("results") or []
-    if search_error or not results:
-        status = "not_found" if not search_error or search_error == "not found" else "error"
+    release_params = urllib.parse.urlencode({"q": query, "type": "release", "format": "CD", "per_page": "1"})
+    master_params = urllib.parse.urlencode({"q": query, "type": "master", "per_page": "1"})
+    release_url = f"https://api.discogs.com/database/search?{release_params}"
+    master_url = f"https://api.discogs.com/database/search?{master_params}"
+    release_payload, _, release_error = cached_json(conn, "discogs", f"search-release:{query}", release_url, headers=headers, refresh_cache=refresh_cache)
+    master_payload, _, master_error = cached_json(conn, "discogs", f"search-master:{query}", master_url, headers=headers, refresh_cache=refresh_cache)
+    release_results = (release_payload or {}).get("results") or []
+    master_results = (master_payload or {}).get("results") or []
+    if release_error and master_error:
+        status = "not_found" if release_error == "not found" or master_error == "not found" else "error"
+        if existing and existing["lookup_status"] == "matched" and status == "error":
+            return
         upsert_external_metadata(
             conn,
             album_id,
             {
                 "provider": "discogs",
                 "lookup_status": status,
-                "lookup_error": search_error,
+                "lookup_error": release_error or master_error,
                 "fetched_at": utc_now(),
-                "raw_json": json.dumps(search_payload or {}, ensure_ascii=False),
+                "raw_json": json.dumps({"release_search": release_payload, "master_search": master_payload}, ensure_ascii=False),
             },
         )
-        upsert_service_status(conn, album_id, "discogs", status, lookup_error=search_error)
+        upsert_service_status(conn, album_id, "discogs", status, lookup_error=release_error or master_error)
+        return
+    if not release_results and not master_results:
+        upsert_external_metadata(
+            conn,
+            album_id,
+            {
+                "provider": "discogs",
+                "lookup_status": "not_found",
+                "lookup_error": release_error or master_error,
+                "fetched_at": utc_now(),
+                "raw_json": json.dumps({"release_search": release_payload, "master_search": master_payload}, ensure_ascii=False),
+            },
+        )
+        upsert_service_status(conn, album_id, "discogs", "not_found", lookup_error=release_error or master_error)
         return
 
-    selected = results[0]
+    selected = release_results[0] if release_results else master_results[0]
     discogs_id = selected.get("id")
     detail_payload = {}
-    if discogs_id:
+    if selected.get("type") == "master" and discogs_id:
+        master_detail, _, _ = cached_json(conn, "discogs", f"master:{discogs_id}", f"https://api.discogs.com/masters/{discogs_id}", headers=headers, refresh_cache=refresh_cache)
+        main_release = (master_detail or {}).get("main_release")
+        if main_release:
+            detail_url = f"https://api.discogs.com/releases/{main_release}"
+            detail_payload, _, _ = cached_json(conn, "discogs", f"release:{main_release}", detail_url, headers=headers, refresh_cache=refresh_cache)
+    elif discogs_id:
         detail_url = f"https://api.discogs.com/releases/{discogs_id}"
         detail_payload, _, _ = cached_json(conn, "discogs", f"release:{discogs_id}", detail_url, headers=headers, refresh_cache=refresh_cache)
 
     payload = detail_payload or selected
+    upsert_discogs_release(
+        conn,
+        album_id,
+        payload,
+        selected,
+        {"release_search": release_payload, "master_search": master_payload, "detail": detail_payload},
+    )
+
+
+def upsert_discogs_release(conn: sqlite3.Connection, album_id: int, payload: dict, selected: dict | None = None, raw: dict | None = None) -> tuple[str | None, str | None]:
+    selected = selected or payload
+    discogs_id = payload.get("id") or selected.get("id")
     cover_url = discogs_cover_url(payload, selected)
+    artist = first_joined([artist.get("name") for artist in payload.get("artists", [])]) if payload.get("artists") else None
     upsert_external_metadata(
         conn,
         album_id,
@@ -816,12 +1253,12 @@ def fetch_discogs(conn: sqlite3.Connection, album_id: int, artist: str, album_na
             "external_id": str(discogs_id) if discogs_id else None,
             "url": payload.get("uri") or payload.get("resource_url"),
             "title": payload.get("title"),
-            "artist": first_joined([artist.get("name") for artist in payload.get("artists", [])]) if payload.get("artists") else None,
+            "artist": artist,
             "genres": json.dumps(payload.get("genres") or selected.get("genre") or [], ensure_ascii=False),
             "styles": json.dumps(payload.get("styles") or selected.get("style") or [], ensure_ascii=False),
             "track_count": len(payload.get("tracklist") or []),
             "cover_url": cover_url,
-            "raw_json": json.dumps({"search": search_payload, "detail": detail_payload}, ensure_ascii=False),
+            "raw_json": json.dumps(raw or payload, ensure_ascii=False),
         },
     )
     upsert_service_status(
@@ -834,6 +1271,7 @@ def fetch_discogs(conn: sqlite3.Connection, album_id: int, artist: str, album_na
         url=payload.get("uri") or payload.get("resource_url"),
     )
     replace_provider_cover_art(conn, album_id, "discogs", cover_url, str(discogs_id) if discogs_id else None, payload)
+    return artist, payload.get("title")
 
 
 def discogs_cover_url(payload: dict, selected: dict) -> str | None:
@@ -844,6 +1282,13 @@ def discogs_cover_url(payload: dict, selected: dict) -> str | None:
 
 
 def fetch_lastfm(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> None:
+    existing = conn.execute(
+        "SELECT lookup_status FROM external_metadata WHERE album_id = ? AND provider = ?",
+        (album_id, "lastfm"),
+    ).fetchone()
+    if existing and existing["lookup_status"] == "matched" and not refresh_cache:
+        return
+
     api_key = os.environ.get("LASTFM_API_KEY", "").strip()
     if not api_key:
         upsert_external_metadata(
@@ -871,10 +1316,23 @@ def fetch_lastfm(conn: sqlite3.Connection, album_id: int, artist: str, album_nam
     url = f"https://ws.audioscrobbler.com/2.0/?{params}"
     payload, _, error = cached_json(conn, "lastfm", f"album:{artist}:{album_name}", url, refresh_cache=refresh_cache)
     album = (payload or {}).get("album") or {}
+    status = "matched" if album else ("not_found" if not error or error == "not found" else "error")
+    if existing and existing["lookup_status"] == "matched" and status == "error":
+        return
+    upsert_lastfm_album(conn, album_id, album, status, error, payload or {})
+
+
+def upsert_lastfm_album(
+    conn: sqlite3.Connection,
+    album_id: int,
+    album: dict,
+    status: str,
+    error: str | None,
+    raw: dict | None = None,
+) -> tuple[str | None, str | None]:
     tags = [tag.get("name") for tag in ((album.get("tags") or {}).get("tag") or []) if tag.get("name")]
     images = album.get("image") or []
     cover_url = next((image.get("#text") for image in reversed(images) if image.get("#text")), None)
-    status = "matched" if album else ("not_found" if not error or error == "not found" else "error")
     upsert_external_metadata(
         conn,
         album_id,
@@ -891,7 +1349,7 @@ def fetch_lastfm(conn: sqlite3.Connection, album_id: int, artist: str, album_nam
             "styles": None,
             "track_count": len(((album.get("tracks") or {}).get("track") or [])),
             "cover_url": cover_url,
-            "raw_json": json.dumps(payload or {}, ensure_ascii=False),
+            "raw_json": json.dumps(raw or {}, ensure_ascii=False),
         },
     )
     upsert_service_status(
@@ -906,6 +1364,7 @@ def fetch_lastfm(conn: sqlite3.Connection, album_id: int, artist: str, album_nam
     )
     if album:
         replace_provider_cover_art(conn, album_id, "lastfm", cover_url, album.get("mbid") or str(album_id), album)
+    return album.get("artist"), album.get("name")
 
 
 def fetch_external_provider(
@@ -934,6 +1393,175 @@ def fetch_external_provider(
             },
         )
         upsert_service_status(conn, album_id, provider, "error", lookup_error=message)
+
+
+def enrich_musicbrainz_release_id(conn: sqlite3.Connection, album_id: int, release_id: str, refresh_cache: bool) -> tuple[str | None, str | None]:
+    detail_payload, _, error = musicbrainz_get(
+        conn,
+        f"release/{release_id}",
+        {
+            "fmt": "json",
+            "inc": "artist-credits+labels+release-groups+media+recordings+genres+tags",
+        },
+        f"release-detail:{release_id}",
+        refresh_cache,
+    )
+    release = detail_payload or {}
+    metadata = release_to_metadata(release if release else None, {"detail": detail_payload}, "matched" if release else "error", error)
+    upsert_metadata(conn, album_id, metadata)
+    upsert_service_status(
+        conn,
+        album_id,
+        "musicbrainz",
+        metadata["lookup_status"],
+        external_id=metadata.get("mb_release_id"),
+        title=metadata.get("title"),
+        url=metadata.get("mb_url"),
+        lookup_error=metadata.get("lookup_error"),
+    )
+    replace_tracks(conn, album_id, release if release else None)
+    replace_musicbrainz_genres(conn, album_id, release if release else None)
+    upsert_musicbrainz_external_metadata(conn, album_id, metadata)
+    fetch_cover_art(conn, album_id, metadata.get("mb_release_id"), refresh_cache)
+    return metadata.get("artist_credit"), metadata.get("title")
+
+
+def enrich_musicbrainz_by_search(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> tuple[str | None, str | None]:
+    release, raw, _ = find_release(conn, artist or "", album_name or "", refresh_cache)
+    metadata = release_to_metadata(release, raw, "matched" if release else "not_found")
+    upsert_metadata(conn, album_id, metadata)
+    upsert_service_status(
+        conn,
+        album_id,
+        "musicbrainz",
+        metadata["lookup_status"],
+        external_id=metadata.get("mb_release_id"),
+        title=metadata.get("title"),
+        url=metadata.get("mb_url"),
+        lookup_error=metadata.get("lookup_error"),
+    )
+    replace_tracks(conn, album_id, release)
+    replace_musicbrainz_genres(conn, album_id, release)
+    upsert_musicbrainz_external_metadata(conn, album_id, metadata)
+    fetch_cover_art(conn, album_id, metadata.get("mb_release_id"), refresh_cache)
+    return metadata.get("artist_credit"), metadata.get("title")
+
+
+def fetch_discogs_release_id(conn: sqlite3.Connection, album_id: int, discogs_id: str, refresh_cache: bool) -> tuple[str | None, str | None]:
+    token = os.environ.get("DISCOGS_TOKEN", "").strip()
+    if not token:
+        raise ValueError("Set DISCOGS_TOKEN to use a Discogs URL.")
+    headers = {"Authorization": f"Discogs token={token}"}
+    detail_url = f"https://api.discogs.com/releases/{discogs_id}"
+    detail_payload, _, error = cached_json(conn, "discogs", f"release:{discogs_id}", detail_url, headers=headers, refresh_cache=refresh_cache)
+    if error or not detail_payload:
+        raise ValueError(error or "Discogs release was not found.")
+    return upsert_discogs_release(conn, album_id, detail_payload, detail_payload, {"detail": detail_payload})
+
+
+def fetch_discogs_master_id(conn: sqlite3.Connection, album_id: int, master_id: str, refresh_cache: bool) -> tuple[str | None, str | None]:
+    token = os.environ.get("DISCOGS_TOKEN", "").strip()
+    if not token:
+        raise ValueError("Set DISCOGS_TOKEN to use a Discogs URL.")
+    headers = {"Authorization": f"Discogs token={token}"}
+    master_url = f"https://api.discogs.com/masters/{master_id}"
+    master_payload, _, master_error = cached_json(conn, "discogs", f"master:{master_id}", master_url, headers=headers, refresh_cache=refresh_cache)
+    if master_error or not master_payload:
+        raise ValueError(master_error or "Discogs master was not found.")
+    release_id = master_payload.get("main_release")
+    if not release_id:
+        raise ValueError("Discogs master does not have a main release.")
+    detail_url = f"https://api.discogs.com/releases/{release_id}"
+    detail_payload, _, detail_error = cached_json(conn, "discogs", f"release:{release_id}", detail_url, headers=headers, refresh_cache=refresh_cache)
+    if detail_error or not detail_payload:
+        raise ValueError(detail_error or "Discogs main release was not found.")
+    return upsert_discogs_release(conn, album_id, detail_payload, detail_payload, {"master": master_payload, "detail": detail_payload})
+
+
+def fetch_lastfm_album_info(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> tuple[str | None, str | None]:
+    api_key = os.environ.get("LASTFM_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("Set LASTFM_API_KEY to use a Last.fm URL.")
+    params = urllib.parse.urlencode(
+        {
+            "method": "album.getinfo",
+            "artist": artist,
+            "album": album_name,
+            "api_key": api_key,
+            "format": "json",
+        }
+    )
+    url = f"https://ws.audioscrobbler.com/2.0/?{params}"
+    payload, _, error = cached_json(conn, "lastfm", f"album:{artist}:{album_name}", url, refresh_cache=refresh_cache)
+    album = (payload or {}).get("album") or {}
+    if error or not album:
+        raise ValueError(error or "Last.fm album was not found.")
+    return upsert_lastfm_album(conn, album_id, album, "matched", None, payload or {})
+
+
+def parse_music_service_url(service_url: str) -> tuple[str, dict[str, str]]:
+    parsed = urllib.parse.urlparse((service_url or "").strip())
+    host = parsed.netloc.casefold().removeprefix("www.")
+    path_parts = [urllib.parse.unquote(part.replace("+", " ")) for part in parsed.path.split("/") if part]
+    if host == "musicbrainz.org" and len(path_parts) >= 2 and path_parts[0] == "release":
+        return "musicbrainz", {"release_id": path_parts[1]}
+    if host == "discogs.com" and len(path_parts) >= 2 and path_parts[0] == "release":
+        return "discogs", {"release_id": path_parts[1].split("-", 1)[0]}
+    if host == "discogs.com" and len(path_parts) >= 2 and path_parts[0] == "master":
+        return "discogs", {"master_id": path_parts[1].split("-", 1)[0]}
+    if host == "last.fm" and len(path_parts) >= 3 and path_parts[0] == "music":
+        artist = path_parts[1]
+        album_name = path_parts[3] if len(path_parts) >= 4 and path_parts[2] in {"+albums", "_"} else path_parts[2]
+        return "lastfm", {"artist": artist, "album_name": album_name}
+    raise ValueError("Enter a MusicBrainz release URL, Discogs release URL, or Last.fm album URL.")
+
+
+def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, service_url: str, refresh_cache: bool = False) -> dict:
+    load_dotenv()
+    album = conn.execute("SELECT artist, album_name FROM albums WHERE id = ?", (album_id,)).fetchone()
+    if not album:
+        raise ValueError("Album not found.")
+
+    provider, data = parse_music_service_url(service_url)
+    anchor_artist = album["artist"]
+    anchor_title = album["album_name"]
+
+    if provider == "musicbrainz":
+        anchor_artist, anchor_title = enrich_musicbrainz_release_id(conn, album_id, data["release_id"], refresh_cache)
+        if anchor_artist and anchor_title:
+            fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+            fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+    elif provider == "discogs":
+        if data.get("master_id"):
+            anchor_artist, anchor_title = fetch_discogs_master_id(conn, album_id, data["master_id"], refresh_cache)
+        else:
+            anchor_artist, anchor_title = fetch_discogs_release_id(conn, album_id, data["release_id"], refresh_cache)
+        if anchor_artist and anchor_title:
+            enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+            fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+    elif provider == "lastfm":
+        anchor_artist, anchor_title = fetch_lastfm_album_info(conn, album_id, data["artist"], data["album_name"], refresh_cache)
+        if anchor_artist and anchor_title:
+            enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+            fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+
+    fetch_lastfm_artist(conn, anchor_artist or album["artist"], refresh_cache)
+    update_master_catalog_fields(conn, album_id)
+    services = conn.execute(
+        """
+        SELECT provider, lookup_status, found, external_id, title, url, lookup_error
+        FROM album_service_status
+        WHERE album_id = ?
+        ORDER BY CASE provider
+            WHEN 'musicbrainz' THEN 1
+            WHEN 'discogs' THEN 2
+            WHEN 'lastfm' THEN 3
+            ELSE 4
+        END, provider
+        """,
+        (album_id,),
+    ).fetchall()
+    return {"provider": provider, "artist": anchor_artist, "album_name": anchor_title, "services": [dict(row) for row in services]}
 
 
 def enrich_first_albums(conn: sqlite3.Connection, limit: int, refresh_cache: bool) -> None:
@@ -965,9 +1593,12 @@ def enrich_first_albums(conn: sqlite3.Connection, limit: int, refresh_cache: boo
             )
             track_count = replace_tracks(conn, album_id, release)
             genre_count = replace_musicbrainz_genres(conn, album_id, release)
+            upsert_musicbrainz_external_metadata(conn, album_id, metadata)
             cover_count = fetch_cover_art(conn, album_id, metadata.get("mb_release_id"), refresh_cache)
             fetch_external_provider(conn, "discogs", album_id, artist or "", album_name or "", refresh_cache)
             fetch_external_provider(conn, "lastfm", album_id, artist or "", album_name or "", refresh_cache)
+            fetch_lastfm_artist(conn, artist or "", refresh_cache)
+            update_master_catalog_fields(conn, album_id)
             cache_note = "cache" if used_musicbrainz_cache else "api"
             print(
                 f"{row_number:03d}: {artist} - {album_name} -> "
@@ -978,6 +1609,9 @@ def enrich_first_albums(conn: sqlite3.Connection, limit: int, refresh_cache: boo
             metadata = release_to_metadata(None, {}, "error", str(exc))
             upsert_metadata(conn, album_id, metadata)
             upsert_service_status(conn, album_id, "musicbrainz", "error", lookup_error=str(exc))
+            upsert_musicbrainz_external_metadata(conn, album_id, metadata)
+            fetch_lastfm_artist(conn, artist or "", refresh_cache)
+            update_master_catalog_fields(conn, album_id)
             print(f"{row_number:03d}: {artist} - {album_name} -> error: {exc}")
         conn.commit()
         if not used_musicbrainz_cache and offset != len(rows) - 1:
@@ -996,6 +1630,7 @@ def main() -> None:
     args.db.parent.mkdir(parents=True, exist_ok=True)
     rows = read_catalog_rows(args.csv)
     with sqlite3.connect(args.db) as conn:
+        conn.row_factory = sqlite3.Row
         create_schema(conn)
         sanitize_cached_urls(conn)
         import_catalog(conn, rows)

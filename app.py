@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import sqlite3
+import sys
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -10,6 +11,8 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "data" / "cd_catalog.sqlite"
 STATIC_DIR = ROOT / "web"
+sys.path.insert(0, str(ROOT))
+from scripts.build_database import enrich_album_from_service_url, load_dotenv
 
 
 class CatalogHandler(SimpleHTTPRequestHandler):
@@ -24,8 +27,17 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             self.handle_album_detail(parsed)
         elif parsed.path == "/api/stats":
             self.handle_stats()
+        elif parsed.path == "/api/tags":
+            self.handle_tags()
         else:
             super().do_GET()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/albums/") and parsed.path.endswith("/music-service-url"):
+            self.handle_music_service_url(parsed)
+        else:
+            self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
     def db(self):
         conn = sqlite3.connect(DB_PATH)
@@ -40,11 +52,18 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def read_json_body(self):
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if not length:
+            return {}
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
     def handle_albums(self, parsed):
         params = parse_qs(parsed.query)
         q = (params.get("q", [""])[0] or "").strip()
         tag = (params.get("tag", [""])[0] or "").strip()
         artist = (params.get("artist", [""])[0] or "").strip()
+        label = (params.get("label", [""])[0] or "").strip()
         hide_na = (params.get("hide_na", ["0"])[0] or "0") == "1"
         enriched = params.get("enriched", ["all"])[0]
         limit = min(max(int(params.get("limit", ["50"])[0] or 50), 1), 200)
@@ -53,30 +72,75 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         where = []
         values = []
         if q:
-            where.append("(albums.artist LIKE ? OR albums.album_name LIKE ? OR albums.catalog_number LIKE ? OR musicbrainz_metadata.title LIKE ?)")
-            needle = f"%{q}%"
-            values.extend([needle, needle, needle, needle])
-        if tag:
             where.append(
                 """
-                EXISTS (
-                    SELECT 1
-                    FROM album_genres
-                    WHERE album_genres.album_id = albums.id
-                      AND album_genres.name = ?
+                (
+                    albums.artist LIKE ? OR albums.album_name LIKE ? OR albums.catalog_number LIKE ?
+                    OR albums.label LIKE ? OR albums.format LIKE ? OR albums.country LIKE ?
+                    OR albums.released LIKE ? OR albums.genre LIKE ?
+                    OR EXISTS (
+                        SELECT 1
+                        FROM external_metadata
+                        WHERE external_metadata.album_id = albums.id
+                          AND (external_metadata.title LIKE ? OR external_metadata.artist LIKE ?)
+                    )
                 )
                 """
             )
-            values.append(tag)
+            needle = f"%{q}%"
+            values.extend([needle, needle, needle, needle, needle, needle, needle, needle, needle, needle])
+        if tag:
+            where.append(
+                """
+                (
+                    EXISTS (
+                        SELECT 1
+                        FROM album_genres
+                        WHERE album_genres.album_id = albums.id
+                          AND LOWER(TRIM(album_genres.name)) = LOWER(TRIM(?))
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM external_metadata, json_each(external_metadata.genres)
+                        WHERE external_metadata.album_id = albums.id
+                          AND json_valid(external_metadata.genres)
+                          AND LOWER(TRIM(json_each.value)) = LOWER(TRIM(?))
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM external_metadata, json_each(external_metadata.styles)
+                        WHERE external_metadata.album_id = albums.id
+                          AND json_valid(external_metadata.styles)
+                          AND LOWER(TRIM(json_each.value)) = LOWER(TRIM(?))
+                    )
+                )
+                """
+            )
+            values.extend([tag, tag, tag])
         if artist:
-            where.append("(albums.artist = ? OR musicbrainz_metadata.artist_credit = ?)")
+            where.append(
+                """
+                (
+                    albums.artist = ?
+                    OR EXISTS (
+                        SELECT 1
+                        FROM external_metadata
+                        WHERE external_metadata.album_id = albums.id
+                          AND external_metadata.artist = ?
+                    )
+                )
+                """
+            )
             values.extend([artist, artist])
+        if label:
+            where.append("albums.label = ?")
+            values.append(label)
         if hide_na:
             where.append("NOT (LOWER(TRIM(albums.artist)) = 'n/a' AND LOWER(TRIM(albums.album_name)) = 'n/a')")
         if enriched == "yes":
-            where.append("musicbrainz_metadata.album_id IS NOT NULL")
+            where.append("EXISTS (SELECT 1 FROM album_service_status WHERE album_service_status.album_id = albums.id)")
         elif enriched == "no":
-            where.append("musicbrainz_metadata.album_id IS NULL")
+            where.append("NOT EXISTS (SELECT 1 FROM album_service_status WHERE album_service_status.album_id = albums.id)")
 
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         with self.db() as conn:
@@ -84,7 +148,6 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 f"""
                 SELECT COUNT(*)
                 FROM albums
-                LEFT JOIN musicbrainz_metadata ON musicbrainz_metadata.album_id = albums.id
                 {where_sql}
                 """,
                 values,
@@ -93,14 +156,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 f"""
                 SELECT
                     albums.id, albums.row_number, albums.catalog_number, albums.media_format, albums.artist,
-                    albums.album_name, albums.version_number, albums.case_broken,
-                    musicbrainz_metadata.lookup_status, musicbrainz_metadata.mb_release_id,
-                    musicbrainz_metadata.title AS mb_title,
-                    musicbrainz_metadata.artist_credit AS mb_artist,
-                    musicbrainz_metadata.date AS mb_date,
-                    musicbrainz_metadata.label_names,
-                    musicbrainz_metadata.track_count,
-                    musicbrainz_metadata.mb_url,
+                    albums.album_name, albums.label, albums.format, albums.country, albums.released,
+                    albums.genre, albums.field_sources, albums.case_broken,
                     (
                         SELECT GROUP_CONCAT(provider, ', ')
                         FROM album_service_status
@@ -108,7 +165,6 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                           AND album_service_status.found = 1
                     ) AS matched_services
                 FROM albums
-                LEFT JOIN musicbrainz_metadata ON musicbrainz_metadata.album_id = albums.id
                 {where_sql}
                 ORDER BY albums.row_number
                 LIMIT ? OFFSET ?
@@ -165,7 +221,12 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                        url, title, artist, genres, styles, track_count, cover_url
                 FROM external_metadata
                 WHERE album_id = ?
-                ORDER BY provider
+                ORDER BY CASE provider
+                    WHEN 'musicbrainz' THEN 1
+                    WHEN 'discogs' THEN 2
+                    WHEN 'lastfm' THEN 3
+                    ELSE 4
+                END, provider
                 """,
                 (album_id,),
             ).fetchall()
@@ -175,13 +236,28 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                        title, url, lookup_error
                 FROM album_service_status
                 WHERE album_id = ?
-                ORDER BY provider
+                ORDER BY CASE provider
+                    WHEN 'musicbrainz' THEN 1
+                    WHEN 'discogs' THEN 2
+                    WHEN 'lastfm' THEN 3
+                    ELSE 4
+                END, provider
                 """,
                 (album_id,),
             ).fetchall()
+            artist_info = conn.execute(
+                """
+                SELECT name, lookup_status, lookup_error, fetched_at, lastfm_mbid,
+                       lastfm_url, bio_summary, bio_content, image_url, local_image_url
+                FROM artists
+                WHERE name = ?
+                """,
+                (album["artist"],),
+            ).fetchone()
         self.send_json(
             {
                 "album": dict(album),
+                "artist": dict(artist_info) if artist_info else None,
                 "musicbrainz": dict(metadata) if metadata else None,
                 "tracks": [dict(row) for row in tracks],
                 "genres": [dict(row) for row in genres],
@@ -191,24 +267,80 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             }
         )
 
+    def handle_music_service_url(self, parsed):
+        try:
+            album_id = int(parsed.path.split("/")[3])
+            payload = self.read_json_body()
+            service_url = (payload.get("url") or "").strip()
+            if not service_url:
+                self.send_json({"error": "Music Service URL is required."}, HTTPStatus.BAD_REQUEST)
+                return
+        except (ValueError, json.JSONDecodeError):
+            self.send_json({"error": "Invalid request."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        load_dotenv()
+        try:
+            with self.db() as conn:
+                result = enrich_album_from_service_url(conn, album_id, service_url, refresh_cache=False)
+                conn.commit()
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        self.send_json(result)
+
     def handle_stats(self):
         with self.db() as conn:
             row = conn.execute(
                 """
                 SELECT
                     COUNT(*) AS albums,
-                    COUNT(musicbrainz_metadata.album_id) AS enriched,
-                    SUM(CASE WHEN musicbrainz_metadata.lookup_status = 'matched' THEN 1 ELSE 0 END) AS matched,
+                    (SELECT COUNT(DISTINCT album_id) FROM album_service_status) AS enriched,
+                    (SELECT COUNT(DISTINCT album_id) FROM album_service_status WHERE found = 1) AS matched,
                     SUM(CASE WHEN albums.case_broken = 'Yes' THEN 1 ELSE 0 END) AS broken_cases,
                     (SELECT COUNT(*) FROM tracks) AS tracks,
                     (SELECT COUNT(*) FROM album_genres) AS genres,
                     (SELECT COUNT(*) FROM cover_art) AS covers,
                     (SELECT COUNT(*) FROM album_service_status WHERE found = 1) AS service_matches
                 FROM albums
-                LEFT JOIN musicbrainz_metadata ON musicbrainz_metadata.album_id = albums.id
                 """
             ).fetchone()
         self.send_json(dict(row))
+
+    def handle_tags(self):
+        with self.db() as conn:
+            rows = conn.execute(
+                """
+                WITH tag_sources(album_id, tag) AS (
+                    SELECT album_id, name
+                    FROM album_genres
+                    UNION ALL
+                    SELECT external_metadata.album_id, json_each.value
+                    FROM external_metadata, json_each(external_metadata.genres)
+                    WHERE external_metadata.lookup_status = 'matched'
+                      AND json_valid(external_metadata.genres)
+                    UNION ALL
+                    SELECT external_metadata.album_id, json_each.value
+                    FROM external_metadata, json_each(external_metadata.styles)
+                    WHERE external_metadata.lookup_status = 'matched'
+                      AND json_valid(external_metadata.styles)
+                ),
+                normalized_tags AS (
+                    SELECT DISTINCT album_id, LOWER(TRIM(tag)) AS name
+                    FROM tag_sources
+                    WHERE TRIM(tag) != ''
+                )
+                SELECT name, COUNT(DISTINCT album_id) AS count
+                FROM normalized_tags
+                GROUP BY name
+                ORDER BY count DESC, name
+                """
+            ).fetchall()
+        tags = [{"name": row["name"], "count": row["count"]} for row in rows]
+        self.send_json({"tags": tags})
 
 
 def main():
