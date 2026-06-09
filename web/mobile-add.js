@@ -12,6 +12,7 @@ const releaseTitle = document.querySelector("#releaseTitle");
 const releaseArtist = document.querySelector("#releaseArtist");
 const releaseDetails = document.querySelector("#releaseDetails");
 const addReleaseButton = document.querySelector("#addReleaseButton");
+const desktopTopAddButton = document.querySelector("#desktopTopAddButton");
 const desktopAddForm = document.querySelector("#desktopAddForm");
 const desktopListenerStatus = document.querySelector("#desktopListenerStatus");
 
@@ -34,7 +35,7 @@ const hasLiveScanner = () => hasNativeScanner() || hasZxingScanner();
 
 function setStatus(message, isError = false) {
   statusMessage.textContent = message || "";
-  statusMessage.style.color = isError ? "#9f2f2f" : "#1f6f43";
+  statusMessage.classList.toggle("isError", Boolean(message && isError));
 }
 
 function cleanBarcode(value) {
@@ -81,6 +82,7 @@ function showRelease(payload) {
   populateDesktopForm(album);
   releaseCard.hidden = false;
   addReleaseButton.disabled = false;
+  if (desktopTopAddButton) desktopTopAddButton.disabled = false;
 }
 
 function populateDesktopForm(album) {
@@ -172,6 +174,7 @@ async function addCurrentRelease() {
     return;
   }
   addReleaseButton.disabled = true;
+  if (desktopTopAddButton) desktopTopAddButton.disabled = true;
   setStatus("Adding album...");
   try {
     const response = await fetch("/api/albums", {
@@ -199,6 +202,7 @@ async function addCurrentRelease() {
   } catch (error) {
     setStatus(error.message, true);
     addReleaseButton.disabled = false;
+    if (desktopTopAddButton) desktopTopAddButton.disabled = false;
   }
 }
 
@@ -362,6 +366,7 @@ lookupForm.addEventListener("submit", (event) => {
 startScanButton.addEventListener("click", startScanner);
 stopScanButton.addEventListener("click", stopScanner);
 addReleaseButton.addEventListener("click", addCurrentRelease);
+desktopTopAddButton?.addEventListener("click", addCurrentRelease);
 
 async function initializeScannerHint() {
   const nativeFormats = await supportedNativeBarcodeFormats();
@@ -381,6 +386,7 @@ async function loadSession() {
   const payload = await response.json();
   currentRoles = payload.roles || currentRoles;
   addReleaseButton.hidden = !canEditCatalog();
+  if (desktopTopAddButton) desktopTopAddButton.hidden = !canEditCatalog();
 }
 
 populateDesktopForm({

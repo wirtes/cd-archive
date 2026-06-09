@@ -56,8 +56,11 @@
 
       <section class="desktopAddPanel" aria-label="Desktop add form">
         <div class="desktopPanelHead">
-          <h2>Desktop Add</h2>
-          <p id="desktopListenerStatus">Listening for scans from your logged-in mobile device.</p>
+          <div>
+            <h2>Desktop Add</h2>
+            <p id="desktopListenerStatus">Listening for scans from your logged-in mobile device.</p>
+          </div>
+          <button class="primaryButton desktopTopAddButton" id="desktopTopAddButton" type="button" disabled>Add</button>
         </div>
         <form id="desktopAddForm" class="desktopAddForm">
           <label>
@@ -133,6 +136,6 @@
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=scanner-2"></script>
+    <script src="/mobile-add.js?v=scanner-3"></script>
   </body>
 </html>

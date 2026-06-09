@@ -64,11 +64,23 @@ main {
 }
 
 .statusMessage {
-  min-height: 20px;
-  color: var(--accent-strong);
-  font-size: 14px;
-  font-weight: 700;
+  min-height: 0;
+  padding: 10px 12px;
+  border: 1px solid #e2b800;
+  border-radius: 6px;
+  background: #ffe94d;
+  color: #111820;
+  font-size: 18px;
+  font-weight: 800;
   line-height: 1.35;
+}
+
+.statusMessage:empty {
+  display: none;
+}
+
+.statusMessage.isError {
+  border-color: #c84343;
 }
 
 .scannerPanel,
@@ -102,8 +114,13 @@ video {
 }
 
 .hint {
-  color: var(--muted);
-  font-size: 13px;
+  padding: 10px 12px;
+  border: 1px solid #e2b800;
+  border-radius: 6px;
+  background: #ffe94d;
+  color: #111820;
+  font-size: 17px;
+  font-weight: 800;
   line-height: 1.35;
 }
 
@@ -281,13 +298,19 @@ dd {
   }
 
   .desktopPanelHead {
-    display: grid;
-    gap: 4px;
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 16px;
   }
 
   .desktopPanelHead p {
     color: var(--muted);
     font-size: 13px;
+  }
+
+  .desktopTopAddButton {
+    min-width: 104px;
   }
 
   .desktopAddForm {
