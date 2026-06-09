@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign In · Radio 1190 Music Archive</title>
+    <link rel="stylesheet" href="/login.css" />
+  </head>
+  <body>
+    <main class="loginShell">
+      <form class="loginForm" id="loginForm">
+        <img src="/images/1190-logo-reversed-300x180.png" alt="Radio 1190" />
+        <h1>Radio 1190 Music Archive</h1>
+        <label>
+          <span>Username</span>
+          <input name="username" autocomplete="username" required />
+        </label>
+        <label>
+          <span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit">Sign In</button>
+        <p id="loginMessage" role="status" aria-live="polite"></p>
+      </form>
+    </main>
+    <script src="/login.js?v=auth-1"></script>
+  </body>
+</html>

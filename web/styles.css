@@ -21,20 +21,44 @@
 
 body {
   margin: 0;
+  height: 100vh;
+  overflow: hidden;
   background: var(--soft);
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(240px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(390px, 540px) minmax(0, 1fr);
   gap: 22px;
   align-items: end;
   padding: 18px 22px;
   background: var(--nav);
   border-bottom: 4px solid var(--accent);
   color: #f7faf8;
+}
+
+.brandBlock {
+  display: grid;
+  grid-template-columns: 137px minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+}
+
+.logoLink {
+  display: block;
+  width: 137px;
+  height: auto;
+}
+
+.siteLogo {
+  display: block;
+  width: 137px;
+  height: auto;
+  object-fit: contain;
 }
 
 h1 {
@@ -62,6 +86,11 @@ p {
 #stats {
   color: #b8c5cf;
   font-size: 12px;
+  line-height: 1.45;
+}
+
+.statsLine {
+  display: block;
 }
 
 .statsLink {
@@ -96,8 +125,47 @@ p {
   width: min(520px, 100%);
 }
 
-.addButton {
+.checkboxRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  align-items: center;
+}
+
+.headerActions {
+  display: grid;
+  gap: 6px;
   justify-self: end;
+  justify-items: end;
+}
+
+.addButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  font: inherit;
+  text-decoration: none;
+}
+
+.mobileAddLink {
+  color: #dce6ee;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.mobileAddLink:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+.mobileAddButton:hover {
+  text-decoration: none;
 }
 
 input,
@@ -186,20 +254,29 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) 410px;
   gap: 16px;
   padding: 16px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .results,
 .detail {
   min-width: 0;
+  min-height: 0;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
 }
 
+.results {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
 .tableShell {
   overflow: auto;
-  max-height: calc(100vh - 148px);
+  min-height: 0;
 }
 
 table {
@@ -356,10 +433,6 @@ tbody tr.selected:hover {
 }
 
 .detail {
-  align-self: start;
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 32px);
   overflow: auto;
   padding: 16px;
 }
@@ -790,40 +863,6 @@ tbody tr.selected:hover {
   overflow: hidden;
 }
 
-.serviceUrlForm {
-  margin-top: 22px;
-  padding-top: 14px;
-  border-top: 1px solid #e7ebef;
-}
-
-.serviceUrlForm label {
-  display: block;
-  margin-bottom: 7px;
-  color: #64717d;
-  font-size: 11px;
-  font-weight: 760;
-  text-transform: uppercase;
-}
-
-.serviceUrlForm div {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-}
-
-.serviceUrlForm button {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #ffffff;
-  font-weight: 700;
-}
-
-.serviceUrlForm button:hover {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-  color: #ffffff;
-}
-
 .formMessage {
   margin-top: 8px;
   color: var(--muted);
@@ -929,6 +968,11 @@ tbody tr.selected:hover {
 }
 
 @media (max-width: 980px) {
+  body {
+    overflow: auto;
+    display: block;
+  }
+
   .topbar {
     grid-template-columns: 1fr;
   }
@@ -940,10 +984,10 @@ tbody tr.selected:hover {
 
   .layout {
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .detail {
-    position: static;
     max-height: none;
   }
 }
@@ -953,6 +997,17 @@ tbody tr.selected:hover {
   .layout {
     padding-left: 12px;
     padding-right: 12px;
+  }
+
+  .brandBlock {
+    grid-template-columns: 137px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .logoLink,
+  .siteLogo {
+    width: 137px;
+    height: auto;
   }
 
   .controls {

@@ -1,6 +1,6 @@
 # Radio 1190 Music Archive
 
-A local SQLite-backed browser for the Radio 1190 CD catalog. The app imports `data/CD Catalog.csv`, enriches catalog rows with MusicBrainz, Discogs, and Last.fm metadata, caches API responses locally, downloads usable cover/artist images, and serves a lightweight web interface at `http://127.0.0.1:8190`.
+A local SQLite-backed browser for the Radio 1190 CD catalog. The app imports `data/CD Catalog.csv`, enriches catalog rows with MusicBrainz, Discogs, and Last.fm metadata, caches API responses locally, downloads usable cover/artist images, and serves a lightweight web interface on port `8190`.
 
 ## What It Stores
 
@@ -45,9 +45,15 @@ Create `.env` from `.env.example` and add the tokens you have:
 ```sh
 DISCOGS_TOKEN=your_discogs_token
 LASTFM_API_KEY=your_lastfm_api_key
+APP_USERNAME=admin
+APP_PASSWORD=change_this_password
 ```
 
 MusicBrainz does not require a token, but the script identifies itself with a user agent and rate-limits normal MusicBrainz lookups.
+
+The web app requires login for the desktop catalog, mobile add page, and every `/api/*` call. If `APP_USERNAME` or `APP_PASSWORD` are not set, the local defaults are `admin` and `radio1190`; change them before listening on your LAN.
+
+The default user is seeded as both an admin and editor. Admins can open `/admin.html` to create users and assign admin and/or editor roles. Editors can add, edit, delete, and manually match catalog items. Users without admin or editor roles can browse only; catalog write APIs return `403`.
 
 ## Build The Database
 
@@ -77,7 +83,23 @@ Open:
 http://127.0.0.1:8190
 ```
 
-The default port is `8190`. Override it with `PORT=...` if needed.
+The app listens on `0.0.0.0:8190` by default so it can be reached from your local network. From another device, open `http://<this-computer-ip>:8190`. Override the bind address or port with `HOST=...` or `PORT=...` if needed.
+
+## Mobile Barcode Add
+
+Open the iOS-focused add page on your phone:
+
+```text
+http://<server-address>:8190/mobile-add.html
+```
+
+Tap `Scan UPC` to use the iPhone camera when the browser supports live barcode detection, or enter the UPC manually. The page looks up the release in Discogs, shows the cover image and metadata, and waits for `Add` before writing the album to the catalog. After a successful add, the page resets and shows a message like `Album Name by Artist has been added to the catalog`.
+
+If the same user is logged in on a desktop and opens `mobile-add.html`, the desktop view hides the camera scanner, shows `mobile_qr.png`, and listens for scans from that user's phone. When the phone scans or enters a UPC and Discogs returns a release, the desktop page automatically fills its add form with that release metadata and cover preview.
+
+All add forms require `1190_ID` before the album can be saved.
+
+Camera access generally requires HTTPS or localhost. Manual UPC entry works as a fallback when the page is opened over plain HTTP from another device.
 
 ## Debian Service
 
@@ -97,18 +119,20 @@ Both scripts use `SERVICE_NAME=radio1190-archive` and `PORT=8190` by default. Se
 
 ## Manual Music Service Matching
 
-If a selected album has no matched music services, the sidebar shows a `Music Service URL` field. Paste one of these:
+Open an album and click `Edit` to manually match the catalog row to a service URL. The Edit form includes a `Match to this Album` field. Paste one of these:
 
 - MusicBrainz release URL, for example `https://musicbrainz.org/release/<release-id>`
 - Discogs release URL, for example `https://www.discogs.com/release/<release-id>-...`
 - Discogs master URL, for example `https://www.discogs.com/master/<master-id>-...`
 - Last.fm album URL, for example `https://www.last.fm/music/<artist>/<album>`
 
-When submitted, the supplied URL becomes the anchor match for that album. Discogs master URLs are resolved through the master record's `main_release`. The app then uses the artist/title from that service to look up the same album in the other two services, stores the results in SQLite, and refreshes the sidebar.
+Click `Get Album Info` to preview metadata and album art in the Edit form without saving anything to the catalog database. When the form is saved, the supplied URL becomes the anchor match for that album. Discogs master URLs are resolved through the master record's `main_release`. The app then uses the artist/title from that service to look up the same album in the other two services, stores the results in SQLite, and refreshes the sidebar.
+
+Manual matches prefer Discogs tracklists when a Discogs release or master record is found. The app reapplies the cached Discogs detail payload after the other service lookups finish so a later MusicBrainz lookup does not erase the Discogs tracklist.
 
 ## Add And Edit Albums
 
-Use the header `Add` button to add a new album manually. The Add form can load album data from a Discogs release or master URL only. This keeps new user-created records anchored to Discogs and avoids broad multi-service searching during entry. Existing unmatched albums can still use the sidebar `Music Service URL` field with MusicBrainz, Discogs, or Last.fm URLs.
+Use the header `Add` button to add a new album manually. The Add form can load album data from a Discogs release or master URL only. This keeps new user-created records anchored to Discogs and avoids broad multi-service searching during entry. Existing albums can use the Edit form's `Match to this Album` field with MusicBrainz, Discogs, or Last.fm URLs.
 
 Album detail views include `Edit` and `Delete` buttons. Edit updates the catalog fields stored on `albums`; Delete removes the album and its dependent cached metadata through SQLite foreign-key cascades.
 
@@ -129,6 +153,7 @@ The Add/Edit form includes:
 - Click any tag in the tag cloud to filter by that tag only.
 - Click a record label to show all releases from that label.
 - `Hide N/A albums` defaults on and hides rows where both artist and album are `N/A`.
+- `Search track names` expands the keyword search to cached track titles when checked.
 - The `Music Service` column lists the services matched for each album.
 - The catalog `format` value is highlighted when cached API formats do not include that format.
 - `Add` opens the Add Album form.
@@ -318,7 +343,7 @@ flowchart LR
     Web["web/index.html + app.js + styles.css"] --> Browser["Browser UI"]
     App --> Browser
 
-    Browser --> ManualURL["Sidebar Music Service URL"]
+    Browser --> ManualURL["Edit form Match to this Album URL"]
     Browser --> AddDiscogs["Add form Discogs URL"]
     ManualURL --> App
     AddDiscogs --> App
@@ -329,13 +354,19 @@ flowchart LR
 
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
-| `/api/albums` | `GET` | List albums with optional filters: `q`, `tag`, `artist`, `label`, `hide_na`, `enriched`, `limit`, `offset`. |
+| `/api/albums` | `GET` | List albums with optional filters: `q`, `tag`, `artist`, `label`, `hide_na`, `search_tracks`, `enriched`, `limit`, `offset`. |
 | `/api/albums` | `POST` | Create an album from Add form fields, optional Discogs URL, and optional cover upload. |
 | `/api/albums/<id>` | `GET` | Return one album, service metadata, tracks, genres, covers, and artist profile. |
 | `/api/albums/<id>` | `PUT` | Update an album from Edit form fields and optional cover upload. |
 | `/api/albums/<id>` | `DELETE` | Delete an album and dependent cached rows. |
 | `/api/music-service-preview` | `POST` | Preview Discogs release/master metadata for the Add form without creating a catalog row. |
-| `/api/albums/<id>/music-service-url` | `POST` | Submit a MusicBrainz, Discogs, or Last.fm album URL for an unmatched album. |
+| `/api/music-service-match-preview` | `POST` | Preview MusicBrainz, Discogs, or Last.fm metadata and album art for the Edit form without updating the catalog database. |
+| `/api/discogs-barcode-preview` | `POST` | Preview a Discogs release from a UPC barcode for the mobile add page. |
+| `/api/scan-events` | `GET`/`POST` | Relay same-user mobile barcode scans to a desktop add page. |
+| `/api/login` | `POST` | Create an authenticated session. |
+| `/api/logout` | `POST` | End the current authenticated session. |
+| `/api/users` | `GET`/`POST` | Admin-only user listing and creation. |
+| `/api/albums/<id>/music-service-url` | `POST` | Submit a MusicBrainz, Discogs, or Last.fm album URL for an album. |
 | `/api/stats` | `GET` | Return high-level catalog stats. |
 | `/api/tags` | `GET` | Return tag-cloud data from cached MusicBrainz, Discogs, and Last.fm genre/tag/style records. |
 

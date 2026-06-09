@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Add Album · Radio 1190 Music Archive</title>
+    <link rel="stylesheet" href="/mobile-add.css" />
+  </head>
+  <body>
+    <header class="mobileHeader">
+      <a href="/" aria-label="Radio 1190 Music Archive">
+        <img src="/images/1190-logo-reversed-300x180.png" alt="Radio 1190" />
+      </a>
+      <div>
+        <h1>Add Album</h1>
+        <p>Scan a UPC and add a Discogs release.</p>
+      </div>
+    </header>
+
+    <main>
+      <p class="statusMessage" id="statusMessage" role="status" aria-live="polite"></p>
+
+      <section class="scannerPanel" aria-label="UPC scanner">
+        <video id="scannerVideo" playsinline muted></video>
+        <div class="scannerActions">
+          <button id="startScanButton" type="button">Scan UPC</button>
+          <button id="stopScanButton" type="button" disabled>Stop</button>
+        </div>
+        <p class="hint" id="scannerHint">Camera scanning requires browser barcode support. Use manual UPC entry if scanning is unavailable.</p>
+      </section>
+
+      <section class="desktopQrPanel" aria-label="Mobile scanner link">
+        <img src="/images/mobile_qr.png" alt="QR code for mobile add page" />
+        <p>Open this page on your mobile device to scan UPC codes</p>
+      </section>
+
+      <form class="lookupForm" id="lookupForm">
+        <label for="barcodeInput">UPC barcode</label>
+        <div>
+          <input id="barcodeInput" name="barcode" inputmode="numeric" autocomplete="off" placeholder="Scan or enter UPC" />
+          <button type="submit">Lookup</button>
+        </div>
+        <label for="mobileCatalogInput">1190_ID</label>
+        <input id="mobileCatalogInput" name="catalog_number" type="text" required />
+      </form>
+
+      <section class="releaseCard" id="releaseCard" hidden>
+        <img id="releaseImage" alt="" />
+        <div class="releaseMeta">
+          <h2 id="releaseTitle"></h2>
+          <p id="releaseArtist"></p>
+          <dl id="releaseDetails"></dl>
+          <button class="primaryButton" id="addReleaseButton" type="button">Add</button>
+        </div>
+      </section>
+
+      <section class="desktopAddPanel" aria-label="Desktop add form">
+        <div class="desktopPanelHead">
+          <h2>Desktop Add</h2>
+          <p id="desktopListenerStatus">Listening for scans from your logged-in mobile device.</p>
+        </div>
+        <form id="desktopAddForm" class="desktopAddForm">
+          <label>
+            <span>Timestamp</span>
+            <input name="timestamp" type="text" />
+          </label>
+          <label>
+            <span>1190_ID</span>
+            <input name="catalog_number" type="text" required />
+          </label>
+          <label>
+            <span>Artist</span>
+            <input name="artist" type="text" />
+          </label>
+          <label>
+            <span>Album Name</span>
+            <input name="album_name" type="text" />
+          </label>
+          <label>
+            <span>Version Number</span>
+            <input name="version_number" type="text" />
+          </label>
+          <label>
+            <span>Case Broken</span>
+            <select name="case_broken">
+              <option value="No">No</option>
+              <option value="Yes">Yes</option>
+            </select>
+          </label>
+          <label>
+            <span>Label Number Missing</span>
+            <input name="label_number_missing" type="text" />
+          </label>
+          <label>
+            <span>Label</span>
+            <input name="label" type="text" />
+          </label>
+          <label>
+            <span>Format</span>
+            <select name="format">
+              <option value="CD">CD</option>
+              <option value="Vinyl">Vinyl</option>
+              <option value="Cassette">Cassette</option>
+              <option value="Digital">Digital</option>
+            </select>
+          </label>
+          <label class="checkboxField">
+            <span>Compilation</span>
+            <input name="compilation" type="checkbox" />
+          </label>
+          <label>
+            <span>Country</span>
+            <input name="country" type="text" />
+          </label>
+          <label>
+            <span>Released</span>
+            <input name="released" type="text" />
+          </label>
+          <label>
+            <span>Genre</span>
+            <input name="genre" type="text" />
+          </label>
+          <label class="wide">
+            <span>Notes</span>
+            <textarea name="notes"></textarea>
+          </label>
+          <label class="wide">
+            <span>Other</span>
+            <textarea name="other"></textarea>
+          </label>
+        </form>
+      </section>
+    </main>
+
+    <script src="/mobile-add.js?v=roles-2"></script>
+  </body>
+</html>

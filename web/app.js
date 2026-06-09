@@ -4,10 +4,12 @@ const state = {
   artist: "",
   label: "",
   hideNa: true,
+  searchTracks: false,
   limit: 50,
   offset: 0,
   total: 0,
   selectedId: null,
+  roles: { admin: false, editor: false },
 };
 
 const MUSIC_PREVIEWS_ENABLED = false;
@@ -27,13 +29,31 @@ const nextPage = document.querySelector("#nextPage");
 const searchForm = document.querySelector("#searchForm");
 const searchInput = document.querySelector("#searchInput");
 const hideNaInput = document.querySelector("#hideNaInput");
+const searchTracksInput = document.querySelector("#searchTracksInput");
 const addAlbumButton = document.querySelector("#addAlbumButton");
+const adminLink = document.querySelector("#adminLink");
 const statsEl = document.querySelector("#stats");
 const lightboxEl = document.querySelector("#imageLightbox");
 const lightboxImageEl = document.querySelector("#lightboxImage");
 const lightboxCloseEl = document.querySelector("#lightboxClose");
 let addCoverDataUrl = "";
 let currentDetailPayload = null;
+
+function canEditCatalog() {
+  return Boolean(state.roles.admin || state.roles.editor);
+}
+
+async function loadSession() {
+  const response = await fetch("/api/session");
+  if (response.status === 401) {
+    window.location.href = "/login.html";
+    return;
+  }
+  const payload = await response.json();
+  state.roles = payload.roles || state.roles;
+  addAlbumButton.hidden = !canEditCatalog();
+  adminLink.hidden = !state.roles.admin;
+}
 
 function text(value) {
   return value === null || value === undefined || value === "" ? "—" : value;
@@ -287,7 +307,10 @@ function appleSearch(params) {
 async function loadStats() {
   const response = await fetch("/api/stats");
   const stats = await response.json();
-  statsEl.innerHTML = `${stats.albums.toLocaleString()} albums · ${stats.enriched.toLocaleString()} with source data · ${stats.matched.toLocaleString()} matched · ${stats.tracks.toLocaleString()} tracks · <button class="statsLink" type="button" id="tagCloudButton">${stats.genres.toLocaleString()} genres/tags</button>`;
+  statsEl.innerHTML = `
+    <span class="statsLine">${stats.albums.toLocaleString()} albums · ${stats.enriched.toLocaleString()} with source data · ${stats.tracks.toLocaleString()} tracks</span>
+    <span class="statsLine">${stats.matched.toLocaleString()} matched albums · <button class="statsLink" type="button" id="tagCloudButton">${stats.genres.toLocaleString()} genres/tags</button></span>
+  `;
 }
 
 async function loadAlbums() {
@@ -297,6 +320,7 @@ async function loadAlbums() {
     artist: state.artist,
     label: state.label,
     hide_na: state.hideNa ? "1" : "0",
+    search_tracks: state.searchTracks ? "1" : "0",
     limit: state.limit,
     offset: state.offset,
   });
@@ -367,13 +391,16 @@ function renderDetail(payload) {
   const providerBlocks = renderProviderBlocks(external);
   const trackList = renderTracks(appleAlbum, tracks);
   const artistBlock = album.compilation || isVariousArtist(album.artist) ? "" : renderArtistBlock(artist);
-  const serviceUrlForm = renderMusicServiceUrlForm(album, services);
 
   detailEl.innerHTML = `
-    <div class="detailActions">
-      <button class="primaryButton" type="button" data-edit-album="${escapeAttribute(album.id)}">Edit</button>
-      <button class="dangerButton" type="button" data-delete-album="${escapeAttribute(album.id)}">Delete</button>
-    </div>
+    ${
+      canEditCatalog()
+        ? `<div class="detailActions">
+            <button class="primaryButton" type="button" data-edit-album="${escapeAttribute(album.id)}">Edit</button>
+            <button class="dangerButton" type="button" data-delete-album="${escapeAttribute(album.id)}">Delete</button>
+          </div>`
+        : ""
+    }
     ${coverUrl ? renderLightboxImage("coverImage", coverUrl, `${album.album_name} cover art`) : ""}
     <h2>${escapeHtml(album.album_name)}</h2>
     <p class="metaLine">${renderArtistName(album.artist, "inline")} · row ${escapeHtml(album.row_number)}</p>
@@ -402,8 +429,6 @@ function renderDetail(payload) {
     ${trackList}
 
     ${artistBlock}
-
-    ${serviceUrlForm}
   `;
   if (MUSIC_PREVIEWS_ENABLED) {
     updateTrackPreviewAvailability(album, appleAlbum, tracks);
@@ -511,7 +536,7 @@ function renderTracks(album, tracks) {
 
 const addAlbumFields = [
   { name: "timestamp", label: "Timestamp", type: "text", value: currentTimestampValue },
-  { name: "catalog_number", label: "1190_ID", type: "text" },
+  { name: "catalog_number", label: "1190_ID", type: "text", required: true },
   { name: "artist", label: "Artist", type: "text" },
   { name: "album_name", label: "Album Name", type: "text" },
   { name: "version_number", label: "Version Number", type: "text" },
@@ -561,7 +586,7 @@ function renderAddField(field) {
   return `
     <label class="formField" for="${id}">
       <span>${escapeHtml(field.label)}</span>
-      <input id="${id}" name="${field.name}" type="${escapeAttribute(field.type)}" value="${escapeAttribute(fieldValue)}" />
+      <input id="${id}" name="${field.name}" type="${escapeAttribute(field.type)}" value="${escapeAttribute(fieldValue)}" ${field.required ? "required" : ""} />
     </label>
   `;
 }
@@ -580,7 +605,13 @@ function showAlbumForm(mode = "add", payload = null) {
       <h2>${isEdit ? "Edit Album" : "Add Album"}</h2>
       ${
         isEdit
-          ? ""
+          ? `<label class="formField wide" for="edit-service-url">
+              <span>Match to this Album</span>
+              <div class="serviceLookupRow">
+                <input id="edit-service-url" name="music_service_url" type="url" placeholder="MusicBrainz, Discogs, or Last.fm album URL" />
+                <button type="button" data-preview-match-url>Get Album Info</button>
+              </div>
+            </label>`
           : `<label class="formField wide" for="add-service-url">
               <span>Load from Music Service URL</span>
               <div class="serviceLookupRow">
@@ -610,6 +641,7 @@ function showAlbumForm(mode = "add", payload = null) {
 }
 
 function showAddAlbumForm() {
+  if (!canEditCatalog()) return;
   showAlbumForm("add");
 }
 
@@ -796,24 +828,6 @@ function renderLightboxImage(className, imageUrl, altText) {
   `;
 }
 
-function hasMusicServiceMatch(services) {
-  return services.some((service) => Boolean(service.found));
-}
-
-function renderMusicServiceUrlForm(album, services) {
-  if (hasMusicServiceMatch(services)) return "";
-  return `
-    <form class="serviceUrlForm" data-album-id="${escapeAttribute(album.id)}">
-      <label for="serviceUrl-${escapeAttribute(album.id)}">Music Service URL</label>
-      <div>
-        <input id="serviceUrl-${escapeAttribute(album.id)}" name="url" type="url" placeholder="MusicBrainz, Discogs, or Last.fm album URL" required />
-        <button type="submit">Save</button>
-      </div>
-      <p class="formMessage" aria-live="polite"></p>
-    </form>
-  `;
-}
-
 async function showTagCloud() {
   const response = await fetch("/api/tags");
   const payload = await response.json();
@@ -864,6 +878,12 @@ hideNaInput.addEventListener("change", () => {
   loadAlbums();
 });
 
+searchTracksInput.addEventListener("change", () => {
+  state.searchTracks = searchTracksInput.checked;
+  state.offset = 0;
+  loadAlbums();
+});
+
 addAlbumButton.addEventListener("click", showAddAlbumForm);
 
 rowsEl.addEventListener("click", (event) => {
@@ -893,6 +913,11 @@ detailEl.addEventListener("click", (event) => {
   const loadServiceButton = event.target.closest("[data-load-service-url]");
   if (loadServiceButton) {
     loadServiceUrlIntoAddForm(loadServiceButton.closest(".addAlbumForm"));
+    return;
+  }
+  const previewMatchButton = event.target.closest("[data-preview-match-url]");
+  if (previewMatchButton) {
+    previewMatchIntoEditForm(previewMatchButton.closest(".addAlbumForm"));
     return;
   }
   const editButton = event.target.closest("[data-edit-album]");
@@ -1043,30 +1068,6 @@ detailEl.addEventListener("submit", async (event) => {
     saveAddedAlbum(addForm);
     return;
   }
-  const form = event.target.closest(".serviceUrlForm");
-  if (!form) return;
-  event.preventDefault();
-  const message = form.querySelector(".formMessage");
-  const button = form.querySelector("button");
-  const input = form.querySelector("input[name='url']");
-  message.textContent = "Looking up services...";
-  button.disabled = true;
-  try {
-    const response = await fetch(`/api/albums/${form.dataset.albumId}/music-service-url`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: input.value.trim() }),
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "Unable to save music service URL.");
-    message.textContent = "Saved. Refreshing album metadata...";
-    await loadStats();
-    await loadAlbums();
-    await loadDetail(Number(form.dataset.albumId));
-  } catch (error) {
-    message.textContent = error.message;
-    button.disabled = false;
-  }
 });
 
 async function loadServiceUrlIntoAddForm(form) {
@@ -1104,12 +1105,48 @@ async function loadServiceUrlIntoAddForm(form) {
   }
 }
 
+async function previewMatchIntoEditForm(form) {
+  if (!form) return;
+  const message = form.querySelector("[data-add-message]");
+  const button = form.querySelector("[data-preview-match-url]");
+  const serviceUrl = form.elements.music_service_url.value.trim();
+  if (!serviceUrl) {
+    message.textContent = "Enter a MusicBrainz, Discogs, or Last.fm album URL.";
+    return;
+  }
+  message.textContent = "Looking up album info...";
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/music-service-match-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: serviceUrl,
+        album: addFormValues(form),
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to get album info.");
+    populateAddFormFromBundle(form, payload);
+    message.textContent = "Loaded album info. Review the fields, then save to update the database.";
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function saveAddedAlbum(form) {
   const message = form.querySelector("[data-add-message]");
   const submitButton = form.querySelector("button[type='submit']");
   const values = addFormValues(form);
   const isEdit = form.dataset.mode === "edit";
   const serviceUrl = form.elements.music_service_url?.value.trim() || "";
+  if (!values.catalog_number) {
+    message.textContent = "1190_ID is required.";
+    form.elements.catalog_number?.focus();
+    return;
+  }
   if (!values.artist && !values.album_name && !serviceUrl) {
     message.textContent = "Artist, album name, or Discogs URL is required.";
     return;
@@ -1215,6 +1252,12 @@ nextPage.addEventListener("click", () => {
   loadAlbums();
 });
 
-loadStats();
-hideNaInput.checked = state.hideNa;
-loadAlbums();
+async function init() {
+  await loadSession();
+  await loadStats();
+  hideNaInput.checked = state.hideNa;
+  searchTracksInput.checked = state.searchTracks;
+  loadAlbums();
+}
+
+init();

@@ -1,0 +1,119 @@
+.adminPage {
+  display: block;
+  min-height: 100vh;
+  padding: 32px;
+  background: var(--soft);
+}
+
+.adminShell {
+  width: min(980px, 100%);
+  margin: 0 auto;
+}
+
+.adminHero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.adminHero h1 {
+  margin: 0 0 6px;
+}
+
+.adminHero p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.adminGrid {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) 1fr;
+  gap: 22px;
+  align-items: start;
+}
+
+.adminForm {
+  width: 100%;
+}
+
+.roleOption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.roleOption input {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.userPanel {
+  min-height: 240px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.08);
+}
+
+.userPanel h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+
+.userPanel ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.userPanel li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.userPanel li:last-child {
+  border-bottom: 0;
+}
+
+.userPanel strong {
+  color: var(--ink);
+}
+
+.backLink {
+  display: inline-block;
+  margin-top: 18px;
+  color: var(--accent-strong);
+  font-weight: 760;
+}
+
+@media (max-width: 740px) {
+  .adminPage {
+    padding: 18px;
+  }
+
+  .adminHero {
+    align-items: flex-start;
+  }
+
+  .adminGrid {
+    grid-template-columns: 1fr;
+  }
+}

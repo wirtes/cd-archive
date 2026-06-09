@@ -8,19 +8,34 @@
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <h1><a class="homeLink" href="/">Radio 1190 Music Archive</a></h1>
-        <p id="stats">Loading catalog…</p>
+      <div class="brandBlock">
+        <a class="logoLink" href="/" aria-label="Radio 1190 Music Archive home">
+          <img class="siteLogo" src="/images/1190-logo-reversed-300x180.png" alt="Radio 1190" />
+        </a>
+        <div>
+          <h1><a class="homeLink" href="/">Radio 1190 Music Archive</a></h1>
+          <p id="stats">Loading catalog…</p>
+        </div>
       </div>
       <form id="searchForm" class="controls">
         <div class="searchStack">
           <input id="searchInput" type="search" placeholder="Search artist, album, or catalog #" autocomplete="off" />
-          <label class="checkboxControl">
-            <input id="hideNaInput" type="checkbox" checked />
-            <span>Hide N/A albums</span>
-          </label>
+          <div class="checkboxRow">
+            <label class="checkboxControl">
+              <input id="hideNaInput" type="checkbox" checked />
+              <span>Hide N/A albums</span>
+            </label>
+            <label class="checkboxControl">
+              <input id="searchTracksInput" type="checkbox" />
+              <span>Search track names</span>
+            </label>
+          </div>
         </div>
-        <button id="addAlbumButton" class="addButton" type="button">Add</button>
+        <div class="headerActions">
+          <button id="addAlbumButton" class="addButton" type="button">Add</button>
+          <a class="addButton mobileAddButton" href="/mobile-add.html">Mobile Add</a>
+          <a class="mobileAddLink" id="adminLink" href="/admin.html" hidden>Admin</a>
+        </div>
       </form>
     </header>
 
@@ -57,6 +72,6 @@
       <img id="lightboxImage" alt="" />
     </div>
 
-    <script src="/app.js?v=compilation-track-links-1"></script>
+    <script src="/app.js?v=roles-1"></script>
   </body>
 </html>

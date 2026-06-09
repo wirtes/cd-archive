@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 import base64
 import datetime as dt
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 import sys
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 
 ROOT = Path(__file__).resolve().parent
@@ -16,10 +19,31 @@ DB_PATH = ROOT / "data" / "cd_catalog.sqlite"
 STATIC_DIR = ROOT / "web"
 COVER_DIR = STATIC_DIR / "covers"
 sys.path.insert(0, str(ROOT))
-from scripts.build_database import create_schema, enrich_album_from_discogs_url, enrich_album_from_service_url, load_dotenv
+from scripts.build_database import (
+    cached_json,
+    create_schema,
+    discogs_cover_url,
+    discogs_is_compilation,
+    enrich_album_from_discogs_url,
+    enrich_album_from_service_url,
+    first_joined,
+    is_various_artist,
+    load_dotenv,
+    value_from_mapping_or_string,
+)
 
 
 DEFAULT_PORT = 8190
+DEFAULT_HOST = "0.0.0.0"
+SESSION_COOKIE = "cd_archive_session"
+LOGIN_PATH = "/login.html"
+PUBLIC_PATHS = {
+    LOGIN_PATH,
+    "/login.css",
+    "/login.js",
+    "/api/login",
+    "/images/1190-logo-reversed-300x180.png",
+}
 
 
 def normalize_format(value):
@@ -152,8 +176,66 @@ def is_various_artist(value):
     return normalized in {"v/a", "va", "various", "various artists"}
 
 
+def discogs_release_url(payload):
+    uri = clean_text(payload.get("uri"))
+    if uri.startswith("http"):
+        return uri
+    discogs_id = payload.get("id")
+    return f"https://www.discogs.com/release/{discogs_id}" if discogs_id else ""
+
+
+def discogs_artist(payload):
+    artist_names = [value_from_mapping_or_string(artist, "name") for artist in payload.get("artists") or []]
+    artist = first_joined([name for name in artist_names if name])
+    if discogs_is_compilation(payload) or is_various_artist(artist):
+        return "Various Artists"
+    return artist
+
+
+def discogs_label(payload):
+    labels = [value_from_mapping_or_string(label, "name") for label in payload.get("labels") or []]
+    return first_joined([label for label in labels if label])
+
+
+def discogs_barcodes(payload):
+    values = []
+    for identifier in payload.get("identifiers") or []:
+        if not isinstance(identifier, dict):
+            continue
+        if str(identifier.get("type") or "").casefold() in {"barcode", "upc"}:
+            value = clean_text(identifier.get("value"))
+            if value:
+                values.append(value)
+    return values
+
+
+def discogs_mobile_album(payload):
+    artist = discogs_artist(payload)
+    return {
+        "timestamp": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "catalog_number": "",
+        "artist": artist,
+        "album_name": clean_text(payload.get("title")),
+        "version_number": "",
+        "case_broken": "No",
+        "label_number_missing": "",
+        "label": discogs_label(payload),
+        "format": "CD",
+        "compilation": discogs_is_compilation(payload) or is_various_artist(artist),
+        "country": clean_text(payload.get("country")),
+        "released": clean_text(payload.get("released")),
+        "genre": ", ".join([item for item in (payload.get("genres") or []) if item]),
+        "notes": "",
+        "other": "",
+    }
+
+
 def utc_now():
     return dt.datetime.now(dt.UTC).isoformat()
+
+
+def password_hash(password):
+    return hashlib.sha256(str(password or "").encode("utf-8")).hexdigest()
 
 
 def ensure_database_schema():
@@ -161,6 +243,53 @@ def ensure_database_schema():
         return
     conn = sqlite3.connect(DB_PATH)
     try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_seen TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                is_editor INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scan_events (
+                id INTEGER PRIMARY KEY,
+                username TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_events_user_id ON scan_events(username, id)")
+        load_dotenv()
+        default_user = os.environ.get("APP_USERNAME", "admin")
+        default_password = os.environ.get("APP_PASSWORD", "radio1190")
+        if default_user and default_password:
+            conn.execute(
+                """
+                INSERT INTO users (username, password_hash, is_admin, is_editor, created_at)
+                VALUES (?, ?, 1, 1, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    password_hash = excluded.password_hash,
+                    is_admin = CASE WHEN users.is_admin = 1 THEN 1 ELSE excluded.is_admin END,
+                    is_editor = CASE WHEN users.is_editor = 1 THEN 1 ELSE excluded.is_editor END
+                """,
+                (default_user, password_hash(default_password), utc_now()),
+            )
         columns = {row[1] for row in conn.execute("PRAGMA table_info(albums)").fetchall()}
         if "compilation" not in columns:
             conn.execute("ALTER TABLE albums ADD COLUMN compilation INTEGER NOT NULL DEFAULT 0")
@@ -275,8 +404,80 @@ class CatalogHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
+    def session_cookie(self):
+        cookie = self.headers.get("Cookie", "")
+        for part in cookie.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == SESSION_COOKIE:
+                return value
+        return ""
+
+    def token_hash(self, token):
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def authenticated_user(self):
+        token = self.session_cookie()
+        if not token:
+            return None
+        with self.db() as conn:
+            row = conn.execute(
+                """
+                SELECT auth_sessions.username, users.is_admin, users.is_editor
+                FROM auth_sessions
+                JOIN users ON users.username = auth_sessions.username
+                WHERE auth_sessions.token_hash = ?
+                """,
+                (self.token_hash(token),),
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                "UPDATE auth_sessions SET last_seen = ? WHERE token_hash = ?",
+                (utc_now(), self.token_hash(token)),
+            )
+            conn.commit()
+            return {"username": row["username"], "is_admin": bool(row["is_admin"]), "is_editor": bool(row["is_editor"])}
+
+    def is_public_path(self, parsed):
+        return parsed.path in PUBLIC_PATHS
+
+    def require_auth(self, parsed):
+        user = self.authenticated_user()
+        if user:
+            self.current_user = user["username"]
+            self.current_roles = {"admin": user["is_admin"], "editor": user["is_editor"]}
+            return True
+        if parsed.path.startswith("/api/"):
+            self.send_json({"error": "Authentication required."}, HTTPStatus.UNAUTHORIZED)
+        else:
+            target = quote(self.path, safe="")
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", f"{LOGIN_PATH}?next={target}")
+            self.end_headers()
+        return False
+
+    def require_admin(self):
+        if getattr(self, "current_roles", {}).get("admin"):
+            return True
+        self.send_json({"error": "Administrator role required."}, HTTPStatus.FORBIDDEN)
+        return False
+
+    def require_editor(self):
+        roles = getattr(self, "current_roles", {})
+        if roles.get("admin") or roles.get("editor"):
+            return True
+        self.send_json({"error": "Editor role required."}, HTTPStatus.FORBIDDEN)
+        return False
+
+    def send_no_content(self, status=HTTPStatus.NO_CONTENT):
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if not self.is_public_path(parsed) and not self.require_auth(parsed):
+            return
         if parsed.path == "/api/albums":
             self.handle_albums(parsed)
         elif parsed.path.startswith("/api/albums/"):
@@ -285,13 +486,34 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             self.handle_stats()
         elif parsed.path == "/api/tags":
             self.handle_tags()
+        elif parsed.path == "/api/session":
+            self.send_json({"username": self.current_user, "roles": getattr(self, "current_roles", {})})
+        elif parsed.path == "/api/scan-events":
+            self.handle_scan_events(parsed)
+        elif parsed.path == "/api/users":
+            self.handle_users()
         else:
             super().do_GET()
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/api/music-service-preview":
+        if parsed.path == "/api/login":
+            self.handle_login()
+            return
+        if not self.is_public_path(parsed) and not self.require_auth(parsed):
+            return
+        if parsed.path == "/api/logout":
+            self.handle_logout()
+        elif parsed.path == "/api/music-service-preview":
             self.handle_music_service_preview()
+        elif parsed.path == "/api/music-service-match-preview":
+            self.handle_music_service_match_preview()
+        elif parsed.path == "/api/discogs-barcode-preview":
+            self.handle_discogs_barcode_preview()
+        elif parsed.path == "/api/scan-events":
+            self.handle_create_scan_event()
+        elif parsed.path == "/api/users":
+            self.handle_create_user()
         elif parsed.path == "/api/albums":
             self.handle_create_album()
         elif parsed.path.startswith("/api/albums/") and parsed.path.endswith("/music-service-url"):
@@ -301,6 +523,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
 
     def do_PUT(self):
         parsed = urlparse(self.path)
+        if not self.require_auth(parsed):
+            return
         if parsed.path.startswith("/api/albums/"):
             self.handle_update_album(parsed)
         else:
@@ -308,6 +532,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
 
     def do_DELETE(self):
         parsed = urlparse(self.path)
+        if not self.require_auth(parsed):
+            return
         if parsed.path.startswith("/api/albums/"):
             self.handle_delete_album(parsed)
         else:
@@ -333,6 +559,166 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
+    def configured_credentials(self):
+        load_dotenv()
+        return (
+            os.environ.get("APP_USERNAME", "admin"),
+            os.environ.get("APP_PASSWORD", "radio1190"),
+        )
+
+    def handle_login(self):
+        try:
+            payload = self.read_json_body()
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid request."}, HTTPStatus.BAD_REQUEST)
+            return
+        username = clean_text(payload.get("username"))
+        password = str(payload.get("password") or "")
+        with self.db() as conn:
+            row = conn.execute(
+                "SELECT username, password_hash, is_admin, is_editor FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+            if not row or not hmac.compare_digest(row["password_hash"], password_hash(password)):
+                self.send_json({"error": "Invalid username or password."}, HTTPStatus.UNAUTHORIZED)
+                return
+            token = secrets.token_urlsafe(32)
+            conn.execute(
+                """
+                INSERT INTO auth_sessions (token_hash, username, created_at, last_seen)
+                VALUES (?, ?, ?, ?)
+                """,
+                (self.token_hash(token), username, utc_now(), utc_now()),
+            )
+            conn.commit()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Set-Cookie", f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000")
+        body = json.dumps({"username": username, "roles": {"admin": bool(row["is_admin"]), "editor": bool(row["is_editor"])}}, ensure_ascii=False).encode("utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_logout(self):
+        token = self.session_cookie()
+        if token:
+            with self.db() as conn:
+                conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (self.token_hash(token),))
+                conn.commit()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+        body = b'{"ok": true}'
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_create_scan_event(self):
+        try:
+            payload = self.read_json_body()
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid request."}, HTTPStatus.BAD_REQUEST)
+            return
+        if not isinstance(payload.get("release"), dict):
+            self.send_json({"error": "Release payload is required."}, HTTPStatus.BAD_REQUEST)
+            return
+        event_payload = {
+            "release": payload["release"],
+            "source": clean_text(payload.get("source")) or "mobile",
+        }
+        with self.db() as conn:
+            cursor = conn.execute(
+                "INSERT INTO scan_events (username, created_at, payload_json) VALUES (?, ?, ?)",
+                (self.current_user, utc_now(), json.dumps(event_payload, ensure_ascii=False)),
+            )
+            conn.commit()
+            event_id = cursor.lastrowid
+        self.send_json({"id": event_id})
+
+    def handle_scan_events(self, parsed):
+        params = parse_qs(parsed.query)
+        if params.get("latest", ["0"])[0] in {"1", "true", "yes"}:
+            with self.db() as conn:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS latest_id FROM scan_events WHERE username = ?",
+                    (self.current_user,),
+                ).fetchone()
+            self.send_json({"latest_id": row["latest_id"] if row else 0, "events": []})
+            return
+        after = int(params.get("after", ["0"])[0] or 0)
+        with self.db() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, created_at, payload_json
+                FROM scan_events
+                WHERE username = ? AND id > ?
+                ORDER BY id
+                LIMIT 10
+                """,
+                (self.current_user, after),
+            ).fetchall()
+        events = []
+        for row in rows:
+            events.append(
+                {
+                    "id": row["id"],
+                    "created_at": row["created_at"],
+                    **json.loads(row["payload_json"]),
+                }
+            )
+        self.send_json({"events": events})
+
+    def handle_users(self):
+        if not self.require_admin():
+            return
+        with self.db() as conn:
+            rows = conn.execute(
+                "SELECT username, is_admin, is_editor, created_at FROM users ORDER BY username"
+            ).fetchall()
+        self.send_json(
+            {
+                "users": [
+                    {
+                        "username": row["username"],
+                        "is_admin": bool(row["is_admin"]),
+                        "is_editor": bool(row["is_editor"]),
+                        "created_at": row["created_at"],
+                    }
+                    for row in rows
+                ]
+            }
+        )
+
+    def handle_create_user(self):
+        if not self.require_admin():
+            return
+        try:
+            payload = self.read_json_body()
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid request."}, HTTPStatus.BAD_REQUEST)
+            return
+        username = clean_text(payload.get("username"))
+        password = str(payload.get("password") or "")
+        is_admin = 1 if payload.get("is_admin") else 0
+        is_editor = 1 if payload.get("is_editor") else 0
+        if not username or not password:
+            self.send_json({"error": "Username and password are required."}, HTTPStatus.BAD_REQUEST)
+            return
+        with self.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO users (username, password_hash, is_admin, is_editor, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    password_hash = excluded.password_hash,
+                    is_admin = excluded.is_admin,
+                    is_editor = excluded.is_editor
+                """,
+                (username, password_hash(password), is_admin, is_editor, utc_now()),
+            )
+            conn.commit()
+        self.send_json({"username": username, "is_admin": bool(is_admin), "is_editor": bool(is_editor)}, HTTPStatus.CREATED)
+
     def handle_albums(self, parsed):
         params = parse_qs(parsed.query)
         q = (params.get("q", [""])[0] or "").strip()
@@ -340,6 +726,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         artist = (params.get("artist", [""])[0] or "").strip()
         label = (params.get("label", [""])[0] or "").strip()
         hide_na = (params.get("hide_na", ["0"])[0] or "0") == "1"
+        search_tracks = (params.get("search_tracks", ["0"])[0] or "0") == "1"
         enriched = params.get("enriched", ["all"])[0]
         limit = min(max(int(params.get("limit", ["50"])[0] or 50), 1), 200)
         offset = max(int(params.get("offset", ["0"])[0] or 0), 0)
@@ -347,23 +734,41 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         where = []
         values = []
         if q:
-            where.append(
+            search_parts = [
                 """
-                (
-                    albums.artist LIKE ? OR albums.album_name LIKE ? OR albums.catalog_number LIKE ?
-                    OR albums.label LIKE ? OR albums.format LIKE ? OR albums.country LIKE ?
-                    OR albums.released LIKE ? OR albums.genre LIKE ?
-                    OR EXISTS (
+                albums.artist LIKE ? OR albums.album_name LIKE ? OR albums.catalog_number LIKE ?
+                OR albums.label LIKE ? OR albums.format LIKE ? OR albums.country LIKE ?
+                OR albums.released LIKE ? OR albums.genre LIKE ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM external_metadata
+                    WHERE external_metadata.album_id = albums.id
+                      AND (external_metadata.title LIKE ? OR external_metadata.artist LIKE ?)
+                )
+                """
+            ]
+            needle = f"%{q}%"
+            search_values = [needle, needle, needle, needle, needle, needle, needle, needle, needle, needle]
+            if search_tracks:
+                search_parts.append(
+                    """
+                    EXISTS (
                         SELECT 1
-                        FROM external_metadata
-                        WHERE external_metadata.album_id = albums.id
-                          AND (external_metadata.title LIKE ? OR external_metadata.artist LIKE ?)
+                        FROM tracks
+                        WHERE tracks.album_id = albums.id
+                          AND tracks.title LIKE ?
                     )
+                    """
+                )
+                search_values.append(needle)
+            where.append(
+                f"""
+                (
+                    {" OR ".join(search_parts)}
                 )
                 """
             )
-            needle = f"%{q}%"
-            values.extend([needle, needle, needle, needle, needle, needle, needle, needle, needle, needle])
+            values.extend(search_values)
         if tag:
             where.append(
                 """
@@ -577,6 +982,112 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 pass
         self.send_json({"result": result, **(bundle or {})})
 
+    def handle_music_service_match_preview(self):
+        try:
+            payload = self.read_json_body()
+            service_url = clean_text(payload.get("url"))
+            if not service_url:
+                self.send_json({"error": "Match to this Album URL is required."}, HTTPStatus.BAD_REQUEST)
+                return
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid request."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        load_dotenv()
+        try:
+            conn = sqlite3.connect(":memory:")
+            conn.row_factory = sqlite3.Row
+            create_schema(conn)
+            album_id = self.insert_album(conn, payload.get("album") or {}, row_number=1)
+            result = enrich_album_from_service_url(conn, album_id, service_url, refresh_cache=False)
+            self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
+            bundle = get_album_bundle(conn, album_id)
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        finally:
+            try:
+                conn.close()
+            except UnboundLocalError:
+                pass
+        self.send_json({"result": result, **(bundle or {})})
+
+    def handle_discogs_barcode_preview(self):
+        try:
+            payload = self.read_json_body()
+            barcode = "".join(char for char in clean_text(payload.get("barcode")) if char.isdigit())
+            if not barcode:
+                self.send_json({"error": "UPC barcode is required."}, HTTPStatus.BAD_REQUEST)
+                return
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid request."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        load_dotenv()
+        token = os.environ.get("DISCOGS_TOKEN", "").strip()
+        if not token:
+            self.send_json({"error": "Set DISCOGS_TOKEN to search Discogs by barcode."}, HTTPStatus.BAD_REQUEST)
+            return
+
+        headers = {"Authorization": f"Discogs token={token}"}
+        search_url = f"https://api.discogs.com/database/search?{urlencode({'barcode': barcode, 'type': 'release', 'per_page': '5'})}"
+        try:
+            with self.db() as conn:
+                search_payload, _, search_error = cached_json(
+                    conn,
+                    "discogs",
+                    f"barcode-search:{barcode}",
+                    search_url,
+                    headers=headers,
+                    refresh_cache=False,
+                )
+                results = (search_payload or {}).get("results") or []
+                selected = next((item for item in results if item.get("type") == "release" and item.get("id")), None) or next(
+                    (item for item in results if item.get("id")),
+                    None,
+                )
+                if search_error or not selected:
+                    self.send_json({"error": search_error or f"No Discogs release found for UPC {barcode}."}, HTTPStatus.NOT_FOUND)
+                    return
+                release_id = selected.get("id")
+                detail_url = f"https://api.discogs.com/releases/{release_id}"
+                detail_payload, _, detail_error = cached_json(
+                    conn,
+                    "discogs",
+                    f"release:{release_id}",
+                    detail_url,
+                    headers=headers,
+                    refresh_cache=False,
+                )
+                if detail_error or not detail_payload:
+                    self.send_json({"error": detail_error or "Discogs release detail was not found."}, HTTPStatus.NOT_FOUND)
+                    return
+                conn.commit()
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        cover_url = discogs_cover_url(detail_payload, selected)
+        self.send_json(
+            {
+                "barcode": barcode,
+                "release_url": discogs_release_url(detail_payload),
+                "cover_url": cover_url,
+                "track_count": len(detail_payload.get("tracklist") or []),
+                "barcodes": discogs_barcodes(detail_payload),
+                "album": discogs_mobile_album(detail_payload),
+                "discogs": {
+                    "id": detail_payload.get("id"),
+                    "title": detail_payload.get("title"),
+                    "artists_sort": detail_payload.get("artists_sort"),
+                    "uri": detail_payload.get("uri"),
+                },
+            }
+        )
+
     def update_album_fields(self, conn, album_id, form):
         format_value = clean_text(form.get("format")) or "CD"
         compilation = 1 if form.get("compilation") in (True, "true", "1", "on", 1) else 0
@@ -659,6 +1170,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         )
 
     def handle_create_album(self):
+        if not self.require_editor():
+            return
         try:
             payload = self.read_json_body()
         except json.JSONDecodeError:
@@ -666,6 +1179,9 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             return
         form = payload.get("album") or {}
         service_url = clean_text(payload.get("music_service_url"))
+        if not clean_text(form.get("catalog_number")):
+            self.send_json({"error": "1190_ID is required."}, HTTPStatus.BAD_REQUEST)
+            return
         if not clean_text(form.get("artist")) and not clean_text(form.get("album_name")) and not service_url:
             self.send_json({"error": "Artist, album name, or Music Service URL is required."}, HTTPStatus.BAD_REQUEST)
             return
@@ -695,6 +1211,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             return None
 
     def handle_update_album(self, parsed):
+        if not self.require_editor():
+            return
         album_id = self.parse_album_id(parsed)
         if album_id is None:
             self.send_json({"error": "Invalid album id"}, HTTPStatus.BAD_REQUEST)
@@ -705,12 +1223,21 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": "Invalid request."}, HTTPStatus.BAD_REQUEST)
             return
         form = payload.get("album") or {}
+        service_url = clean_text(payload.get("music_service_url"))
+        if not clean_text(form.get("catalog_number")):
+            self.send_json({"error": "1190_ID is required."}, HTTPStatus.BAD_REQUEST)
+            return
         try:
+            if service_url:
+                load_dotenv()
             with self.db() as conn:
                 if not conn.execute("SELECT 1 FROM albums WHERE id = ?", (album_id,)).fetchone():
                     self.send_json({"error": "Album not found"}, HTTPStatus.NOT_FOUND)
                     return
                 self.update_album_fields(conn, album_id, form)
+                if service_url:
+                    result = enrich_album_from_service_url(conn, album_id, service_url, refresh_cache=False)
+                    self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
                 self.save_uploaded_cover(conn, album_id, payload.get("cover_data_url"))
                 conn.commit()
                 bundle = get_album_bundle(conn, album_id)
@@ -723,6 +1250,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         self.send_json({"album_id": album_id, **(bundle or {})})
 
     def handle_delete_album(self, parsed):
+        if not self.require_editor():
+            return
         album_id = self.parse_album_id(parsed)
         if album_id is None:
             self.send_json({"error": "Invalid album id"}, HTTPStatus.BAD_REQUEST)
@@ -736,6 +1265,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         self.send_json({"deleted": True, "album_id": album_id})
 
     def handle_music_service_url(self, parsed):
+        if not self.require_editor():
+            return
         try:
             album_id = int(parsed.path.split("/")[3])
             payload = self.read_json_body()
@@ -817,8 +1348,9 @@ def main():
         raise SystemExit(f"Database does not exist yet: {DB_PATH}\nRun scripts/build_database.py first.")
     ensure_database_schema()
     port = int(os.environ.get("PORT", DEFAULT_PORT))
-    server = ThreadingHTTPServer(("127.0.0.1", port), CatalogHandler)
-    print(f"Serving CD Archive at http://127.0.0.1:{port}")
+    host = os.environ.get("HOST", DEFAULT_HOST)
+    server = ThreadingHTTPServer((host, port), CatalogHandler)
+    print(f"Serving CD Archive at http://{host}:{port}")
     server.serve_forever()
 
 

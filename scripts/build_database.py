@@ -1208,12 +1208,21 @@ def fetch_lastfm_artist(conn: sqlite3.Connection, artist: str, refresh_cache: bo
     )
 
 
-def fetch_discogs(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> None:
+def fetch_discogs(
+    conn: sqlite3.Connection,
+    album_id: int,
+    artist: str,
+    album_name: str,
+    refresh_cache: bool,
+    prefer_discogs_tracks: bool = False,
+) -> None:
     existing = conn.execute(
         "SELECT lookup_status FROM external_metadata WHERE album_id = ? AND provider = ?",
         (album_id, "discogs"),
     ).fetchone()
     if existing and existing["lookup_status"] == "matched" and not refresh_cache:
+        if prefer_discogs_tracks:
+            replace_tracks_from_cached_discogs_match(conn, album_id)
         return
 
     token = os.environ.get("DISCOGS_TOKEN", "").strip()
@@ -1293,10 +1302,18 @@ def fetch_discogs(conn: sqlite3.Connection, album_id: int, artist: str, album_na
         payload,
         selected,
         {"release_search": release_payload, "master_search": master_payload, "detail": detail_payload},
+        replace_tracklist=prefer_discogs_tracks,
     )
 
 
-def upsert_discogs_release(conn: sqlite3.Connection, album_id: int, payload: dict, selected: dict | None = None, raw: dict | None = None) -> tuple[str | None, str | None]:
+def upsert_discogs_release(
+    conn: sqlite3.Connection,
+    album_id: int,
+    payload: dict,
+    selected: dict | None = None,
+    raw: dict | None = None,
+    replace_tracklist: bool = False,
+) -> tuple[str | None, str | None]:
     selected = selected or payload
     discogs_id = payload.get("id") or selected.get("id")
     cover_url = discogs_cover_url(payload, selected)
@@ -1334,7 +1351,7 @@ def upsert_discogs_release(conn: sqlite3.Connection, album_id: int, payload: dic
         url=payload.get("uri") or payload.get("resource_url"),
     )
     replace_provider_cover_art(conn, album_id, "discogs", cover_url, str(discogs_id) if discogs_id else None, payload)
-    insert_discogs_tracks_if_missing(conn, album_id, payload)
+    insert_discogs_tracks(conn, album_id, payload, replace_existing=replace_tracklist)
     return artist, payload.get("title")
 
 
@@ -1370,9 +1387,9 @@ def flatten_discogs_tracks(tracklist: list[dict]) -> list[dict]:
     return tracks
 
 
-def insert_discogs_tracks_if_missing(conn: sqlite3.Connection, album_id: int, payload: dict) -> int:
+def insert_discogs_tracks(conn: sqlite3.Connection, album_id: int, payload: dict, replace_existing: bool = False) -> int:
     existing = conn.execute("SELECT COUNT(*) FROM tracks WHERE album_id = ?", (album_id,)).fetchone()[0]
-    if existing:
+    if existing and not replace_existing:
         return 0
     tracklist = flatten_discogs_tracks(payload.get("tracklist") or [])
     rows = []
@@ -1397,6 +1414,8 @@ def insert_discogs_tracks_if_missing(conn: sqlite3.Connection, album_id: int, pa
         )
     if not rows:
         return 0
+    if replace_existing:
+        conn.execute("DELETE FROM tracks WHERE album_id = ?", (album_id,))
     conn.executemany(
         """
         INSERT INTO tracks (
@@ -1407,6 +1426,39 @@ def insert_discogs_tracks_if_missing(conn: sqlite3.Connection, album_id: int, pa
         rows,
     )
     return len(rows)
+
+
+def discogs_detail_payload_from_raw(raw_json: str | None) -> dict | None:
+    if not raw_json:
+        return None
+    try:
+        raw = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    for key in ("detail", "release"):
+        payload = raw.get(key)
+        if isinstance(payload, dict) and payload.get("tracklist"):
+            return payload
+    if raw.get("tracklist"):
+        return raw
+    return None
+
+
+def replace_tracks_from_cached_discogs_match(conn: sqlite3.Connection, album_id: int) -> int:
+    row = conn.execute(
+        """
+        SELECT raw_json
+        FROM external_metadata
+        WHERE album_id = ? AND provider = 'discogs' AND lookup_status = 'matched'
+        """,
+        (album_id,),
+    ).fetchone()
+    payload = discogs_detail_payload_from_raw(row["raw_json"] if row else None)
+    if not payload:
+        return 0
+    return insert_discogs_tracks(conn, album_id, payload, replace_existing=True)
 
 
 def discogs_cover_url(payload: dict, selected: dict) -> str | None:
@@ -1593,7 +1645,13 @@ def enrich_musicbrainz_by_search(conn: sqlite3.Connection, album_id: int, artist
     return metadata.get("artist_credit"), metadata.get("title")
 
 
-def fetch_discogs_release_id(conn: sqlite3.Connection, album_id: int, discogs_id: str, refresh_cache: bool) -> tuple[str | None, str | None]:
+def fetch_discogs_release_id(
+    conn: sqlite3.Connection,
+    album_id: int,
+    discogs_id: str,
+    refresh_cache: bool,
+    replace_tracklist: bool = True,
+) -> tuple[str | None, str | None]:
     token = os.environ.get("DISCOGS_TOKEN", "").strip()
     if not token:
         raise ValueError("Set DISCOGS_TOKEN to use a Discogs URL.")
@@ -1602,10 +1660,16 @@ def fetch_discogs_release_id(conn: sqlite3.Connection, album_id: int, discogs_id
     detail_payload, _, error = cached_json(conn, "discogs", f"release:{discogs_id}", detail_url, headers=headers, refresh_cache=refresh_cache)
     if error or not detail_payload:
         raise ValueError(error or "Discogs release was not found.")
-    return upsert_discogs_release(conn, album_id, detail_payload, detail_payload, {"detail": detail_payload})
+    return upsert_discogs_release(conn, album_id, detail_payload, detail_payload, {"detail": detail_payload}, replace_tracklist=replace_tracklist)
 
 
-def fetch_discogs_master_id(conn: sqlite3.Connection, album_id: int, master_id: str, refresh_cache: bool) -> tuple[str | None, str | None]:
+def fetch_discogs_master_id(
+    conn: sqlite3.Connection,
+    album_id: int,
+    master_id: str,
+    refresh_cache: bool,
+    replace_tracklist: bool = True,
+) -> tuple[str | None, str | None]:
     token = os.environ.get("DISCOGS_TOKEN", "").strip()
     if not token:
         raise ValueError("Set DISCOGS_TOKEN to use a Discogs URL.")
@@ -1621,7 +1685,7 @@ def fetch_discogs_master_id(conn: sqlite3.Connection, album_id: int, master_id: 
     detail_payload, _, detail_error = cached_json(conn, "discogs", f"release:{release_id}", detail_url, headers=headers, refresh_cache=refresh_cache)
     if detail_error or not detail_payload:
         raise ValueError(detail_error or "Discogs main release was not found.")
-    return upsert_discogs_release(conn, album_id, detail_payload, detail_payload, {"master": master_payload, "detail": detail_payload})
+    return upsert_discogs_release(conn, album_id, detail_payload, detail_payload, {"master": master_payload, "detail": detail_payload}, replace_tracklist=replace_tracklist)
 
 
 def fetch_lastfm_album_info(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> tuple[str | None, str | None]:
@@ -1675,7 +1739,7 @@ def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, servi
     if provider == "musicbrainz":
         anchor_artist, anchor_title = enrich_musicbrainz_release_id(conn, album_id, data["release_id"], refresh_cache)
         if anchor_artist and anchor_title:
-            fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+            fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache, prefer_discogs_tracks=True)
             fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
     elif provider == "discogs":
         if data.get("master_id"):
@@ -1689,10 +1753,11 @@ def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, servi
         anchor_artist, anchor_title = fetch_lastfm_album_info(conn, album_id, data["artist"], data["album_name"], refresh_cache)
         if anchor_artist and anchor_title:
             enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
-            fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+            fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache, prefer_discogs_tracks=True)
 
     fetch_lastfm_artist(conn, anchor_artist or album["artist"], refresh_cache)
     update_master_catalog_fields(conn, album_id)
+    replace_tracks_from_cached_discogs_match(conn, album_id)
     services = conn.execute(
         """
         SELECT provider, lookup_status, found, external_id, title, url, lookup_error

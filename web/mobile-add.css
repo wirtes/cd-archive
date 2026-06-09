@@ -1,0 +1,317 @@
+:root {
+  color-scheme: light;
+  --ink: #1f2933;
+  --muted: #697785;
+  --line: #d8dee4;
+  --surface: #ffffff;
+  --soft: #eef2f4;
+  --nav: #22313f;
+  --accent: #c84343;
+  --accent-strong: #9f2f2f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--soft);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.mobileHeader {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+  background: var(--nav);
+  border-bottom: 4px solid var(--accent);
+  color: #f7faf8;
+}
+
+.mobileHeader img {
+  display: block;
+  width: 110px;
+  height: auto;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 23px;
+  line-height: 1.1;
+}
+
+.mobileHeader p {
+  margin-top: 5px;
+  color: #b8c5cf;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+main {
+  display: grid;
+  gap: 14px;
+  padding: 14px 14px calc(18px + env(safe-area-inset-bottom));
+}
+
+.statusMessage {
+  min-height: 20px;
+  color: var(--accent-strong);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.scannerPanel,
+.lookupForm,
+.releaseCard {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+}
+
+.scannerPanel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+video {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 4px;
+  background: #111820;
+  object-fit: cover;
+}
+
+.scannerActions,
+.lookupForm div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.lookupForm {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+input,
+button,
+select,
+textarea {
+  min-height: 44px;
+  border: 1px solid #cbd4dc;
+  border-radius: 5px;
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  min-width: 0;
+  padding: 0 12px;
+  font-size: 18px;
+}
+
+textarea {
+  min-height: 86px;
+  padding-top: 10px;
+  resize: vertical;
+}
+
+button {
+  padding: 0 14px;
+  background: #ffffff;
+  color: var(--ink);
+  font-weight: 760;
+}
+
+button:disabled {
+  opacity: 0.45;
+}
+
+.primaryButton,
+.lookupForm button,
+#startScanButton {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.releaseCard {
+  overflow: hidden;
+}
+
+.releaseCard img {
+  display: block;
+  width: 100%;
+  max-height: 48vh;
+  background: #f4f6f8;
+  object-fit: contain;
+}
+
+.releaseMeta {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+h2 {
+  font-size: 21px;
+  line-height: 1.15;
+}
+
+#releaseArtist {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 14px;
+}
+
+dt {
+  color: var(--muted);
+  font-weight: 760;
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.desktopAddPanel {
+  display: none;
+}
+
+.desktopQrPanel {
+  display: none;
+}
+
+@media (min-width: 760px) {
+  body {
+    min-height: 100vh;
+  }
+
+  .mobileHeader {
+    grid-template-columns: 137px minmax(0, 1fr);
+  }
+
+  .mobileHeader img {
+    width: 137px;
+  }
+
+  main {
+    grid-template-columns: minmax(280px, 390px) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .statusMessage {
+    grid-column: 1 / -1;
+  }
+
+  .scannerPanel {
+    display: none;
+  }
+
+  .desktopQrPanel,
+  .lookupForm,
+  .releaseCard {
+    grid-column: 1;
+  }
+
+  .desktopQrPanel {
+    display: grid;
+    gap: 12px;
+    justify-items: center;
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    text-align: center;
+    color: var(--muted);
+    font-weight: 760;
+    line-height: 1.35;
+  }
+
+  .desktopQrPanel img {
+    width: min(240px, 100%);
+    height: auto;
+  }
+
+  .desktopAddPanel {
+    display: grid;
+    gap: 14px;
+    grid-column: 2;
+    grid-row: 2 / span 4;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  }
+
+  .desktopPanelHead {
+    display: grid;
+    gap: 4px;
+  }
+
+  .desktopPanelHead p {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .desktopAddForm {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .desktopAddForm label {
+    display: grid;
+    gap: 6px;
+  }
+
+  .desktopAddForm .wide {
+    grid-column: 1 / -1;
+  }
+
+  .checkboxField {
+    grid-template-columns: 1fr auto;
+    align-items: end;
+  }
+
+  .checkboxField input {
+    width: 20px;
+    min-height: 20px;
+  }
+}
