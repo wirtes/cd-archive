@@ -198,13 +198,13 @@ Open the iOS-focused add page on your phone:
 http://<server-address>:8190/mobile-add.html
 ```
 
-Tap `Scan UPC` to use the iPhone camera when the browser supports live barcode detection, or enter the UPC manually. The page looks up the release in Discogs, shows the cover image and metadata, and waits for `Add` before writing the album to the catalog. After a successful add, the page resets and shows a message like `Album Name by Artist has been added to the catalog`.
+Tap `Scan UPC` to use the iPhone camera when the browser supports live barcode detection, or enter the UPC manually. The page uses the browser-native `BarcodeDetector` API when UPC/EAN scanning is available and falls back to the locally vendored free ZXing browser scanner for iOS Safari and other browsers without native barcode support. The page looks up the release in Discogs, shows the cover image and metadata, and waits for `Add` before writing the album to the catalog. After a successful add, the page resets and shows a message like `Album Name by Artist has been added to the catalog`.
 
 If the same user is logged in on a desktop and opens `mobile-add.html`, the desktop view hides the camera scanner, shows `mobile_qr.png`, and listens for scans from that user's phone. When the phone scans or enters a UPC and Discogs returns a release, the desktop page automatically fills its add form with that release metadata and cover preview.
 
 All add forms require `1190_ID` before the album can be saved.
 
-Camera access generally requires HTTPS or localhost. Manual UPC entry works as a fallback when the page is opened over plain HTTP from another device.
+Camera access generally requires HTTPS or localhost. Manual UPC entry works as a fallback when the page is opened over plain HTTP from another device or camera permission is denied.
 
 ## Manual Music Service Matching
 

@@ -16,6 +16,8 @@ const desktopAddForm = document.querySelector("#desktopAddForm");
 const desktopListenerStatus = document.querySelector("#desktopListenerStatus");
 
 let barcodeDetector = null;
+let zxingReader = null;
+let zxingControls = null;
 let scanStream = null;
 let scanFrame = 0;
 let currentRelease = null;
@@ -23,8 +25,12 @@ let lookupInProgress = false;
 let lastScanEventId = 0;
 let currentRoles = { admin: false, editor: false };
 
+const UPC_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e"];
 const isDesktopView = () => window.matchMedia("(min-width: 760px)").matches;
 const canEditCatalog = () => Boolean(currentRoles.admin || currentRoles.editor);
+const hasNativeScanner = () => "BarcodeDetector" in window;
+const hasZxingScanner = () => Boolean(window.ZXingBrowser?.BrowserMultiFormatReader);
+const hasLiveScanner = () => hasNativeScanner() || hasZxingScanner();
 
 function setStatus(message, isError = false) {
   statusMessage.textContent = message || "";
@@ -37,6 +43,17 @@ function cleanBarcode(value) {
 
 function text(value) {
   return value === null || value === undefined || value === "" ? "N/A" : String(value);
+}
+
+async function supportedNativeBarcodeFormats() {
+  if (!hasNativeScanner()) return [];
+  if (!BarcodeDetector.getSupportedFormats) return UPC_FORMATS;
+  try {
+    const formats = await BarcodeDetector.getSupportedFormats();
+    return UPC_FORMATS.filter((format) => formats.includes(format));
+  } catch {
+    return UPC_FORMATS;
+  }
 }
 
 function renderDetails(payload) {
@@ -235,6 +252,13 @@ async function initializeScanListener() {
 function stopScanner() {
   cancelAnimationFrame(scanFrame);
   scanFrame = 0;
+  if (zxingControls) {
+    zxingControls.stop();
+    zxingControls = null;
+  }
+  if (zxingReader?.reset) {
+    zxingReader.reset();
+  }
   if (scanStream) {
     scanStream.getTracks().forEach((track) => track.stop());
     scanStream = null;
@@ -244,15 +268,21 @@ function stopScanner() {
   stopScanButton.disabled = true;
 }
 
+function handleScannedBarcode(value) {
+  const clean = cleanBarcode(value);
+  if (!clean || lookupInProgress) return;
+  stopScanner();
+  barcodeInput.value = clean;
+  lookupBarcode(clean);
+}
+
 async function scanLoop() {
   if (!barcodeDetector || !scanStream || lookupInProgress) return;
   try {
     const codes = await barcodeDetector.detect(videoEl);
     const value = cleanBarcode(codes[0]?.rawValue);
     if (value) {
-      stopScanner();
-      barcodeInput.value = value;
-      lookupBarcode(value);
+      handleScannedBarcode(value);
       return;
     }
   } catch {
@@ -263,31 +293,63 @@ async function scanLoop() {
   scanFrame = requestAnimationFrame(scanLoop);
 }
 
+async function startNativeScanner() {
+  const formats = await supportedNativeBarcodeFormats();
+  if (!formats.length) {
+    throw new Error("Native scanner does not support UPC/EAN formats.");
+  }
+  barcodeDetector = barcodeDetector || new BarcodeDetector({ formats });
+  scanStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: "environment" } },
+    audio: false,
+  });
+  videoEl.srcObject = scanStream;
+  await videoEl.play();
+  startScanButton.disabled = true;
+  stopScanButton.disabled = false;
+  setStatus("Point the camera at the UPC barcode.");
+  scanFrame = requestAnimationFrame(scanLoop);
+}
+
+async function startZxingScanner() {
+  const { BrowserMultiFormatReader } = window.ZXingBrowser || {};
+  if (!BrowserMultiFormatReader) {
+    throw new Error("Live barcode scanning is not available in this browser. Enter the UPC manually.");
+  }
+  zxingReader = zxingReader || new BrowserMultiFormatReader();
+  startScanButton.disabled = true;
+  stopScanButton.disabled = false;
+  setStatus("Point the camera at the UPC barcode.");
+  zxingControls = await zxingReader.decodeFromVideoDevice(null, videoEl, (result, error, controls) => {
+    if (controls && !zxingControls) zxingControls = controls;
+    if (!result) return;
+    handleScannedBarcode(result.getText?.() || result.text || result.rawValue);
+  });
+}
+
 async function startScanner() {
   if (isDesktopView()) return;
-  if (!("BarcodeDetector" in window)) {
-    setStatus("This browser does not support live barcode scanning. Enter the UPC manually.", true);
-    return;
-  }
   if (!window.isSecureContext) {
     setStatus("Camera scanning requires HTTPS or localhost. Enter the UPC manually on this connection.", true);
     return;
   }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus("This browser cannot access the camera. Enter the UPC manually.", true);
+    return;
+  }
+  if (!hasLiveScanner()) {
+    setStatus("Live barcode scanning is not available in this browser. Enter the UPC manually.", true);
+    return;
+  }
   try {
-    barcodeDetector = barcodeDetector || new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
-    scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" } },
-      audio: false,
-    });
-    videoEl.srcObject = scanStream;
-    await videoEl.play();
-    startScanButton.disabled = true;
-    stopScanButton.disabled = false;
-    setStatus("Point the camera at the UPC barcode.");
-    scanFrame = requestAnimationFrame(scanLoop);
-  } catch {
+    if ((await supportedNativeBarcodeFormats()).length) {
+      await startNativeScanner();
+    } else {
+      await startZxingScanner();
+    }
+  } catch (error) {
     stopScanner();
-    setStatus("Camera access failed. Enter the UPC manually.", true);
+    setStatus(error.message || "Camera access failed. Enter the UPC manually.", true);
   }
 }
 
@@ -301,8 +363,13 @@ startScanButton.addEventListener("click", startScanner);
 stopScanButton.addEventListener("click", stopScanner);
 addReleaseButton.addEventListener("click", addCurrentRelease);
 
-if (!("BarcodeDetector" in window)) {
-  scannerHint.textContent = "Live scanning is not available in this browser. Enter the UPC manually.";
+async function initializeScannerHint() {
+  const nativeFormats = await supportedNativeBarcodeFormats();
+  if (!nativeFormats.length && !hasZxingScanner()) {
+    scannerHint.textContent = "Live scanning is not available in this browser. Enter the UPC manually.";
+  } else if (!nativeFormats.length && hasZxingScanner()) {
+    scannerHint.textContent = "Live UPC scanning is available through the built-in ZXing scanner.";
+  }
 }
 
 async function loadSession() {
@@ -321,6 +388,7 @@ populateDesktopForm({
   format: "CD",
   case_broken: "No",
 });
+initializeScannerHint();
 loadSession().then(async () => {
   await initializeScanListener();
   setInterval(pollScanEvents, 1800);
