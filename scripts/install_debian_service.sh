@@ -6,12 +6,21 @@ APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 RUN_USER="${RUN_USER:-${SUDO_USER:-$(id -un)}}"
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 PORT="${PORT:-8190}"
+HOST="${HOST:-0.0.0.0}"
+DATA_DIR="${DATA_DIR:-/var/lib/${SERVICE_NAME}}"
+ENV_FILE="${ENV_FILE:-/etc/${SERVICE_NAME}.env}"
+DATABASE_PATH="${DATABASE_PATH:-${DATA_DIR}/data/cd_catalog.sqlite}"
+COVER_DIR="${COVER_DIR:-${DATA_DIR}/covers}"
+ARTIST_IMAGE_DIR="${ARTIST_IMAGE_DIR:-${DATA_DIR}/artist-images}"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run with sudo: sudo $0" >&2
   exit 1
 fi
+
+mkdir -p "$(dirname "${DATABASE_PATH}")" "${COVER_DIR}" "${ARTIST_IMAGE_DIR}"
+chown -R "${RUN_USER}:${RUN_USER}" "${DATA_DIR}" 2>/dev/null || true
 
 cat > "${UNIT_PATH}" <<UNIT
 [Unit]
@@ -22,7 +31,13 @@ After=network.target
 Type=simple
 User=${RUN_USER}
 WorkingDirectory=${APP_DIR}
+EnvironmentFile=-${ENV_FILE}
+Environment=HOST=${HOST}
 Environment=PORT=${PORT}
+Environment=DATABASE_PATH=${DATABASE_PATH}
+Environment=COVER_DIR=${COVER_DIR}
+Environment=ARTIST_IMAGE_DIR=${ARTIST_IMAGE_DIR}
+Environment=ENV_PATH=${ENV_FILE}
 ExecStart=${PYTHON_BIN} ${APP_DIR}/app.py
 Restart=on-failure
 RestartSec=5

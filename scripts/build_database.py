@@ -16,13 +16,36 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CSV_PATH = ROOT / "data" / "CD Catalog.csv"
-DB_PATH = ROOT / "data" / "cd_catalog.sqlite"
-COVER_DIR = ROOT / "web" / "covers"
-ARTIST_IMAGE_DIR = ROOT / "web" / "artist-images"
+ENV_PATH = Path(os.environ.get("ENV_PATH", ROOT / ".env")).expanduser()
+
+
+def preload_dotenv(path: Path = ENV_PATH) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+preload_dotenv()
+
+
+def env_path(name: str, default: Path) -> Path:
+    return Path(os.environ.get(name, default)).expanduser()
+
+
+DB_PATH = env_path("DATABASE_PATH", ROOT / "data" / "cd_catalog.sqlite")
+COVER_DIR = env_path("COVER_DIR", ROOT / "web" / "covers")
+ARTIST_IMAGE_DIR = env_path("ARTIST_IMAGE_DIR", ROOT / "web" / "artist-images")
 
 USER_AGENT = "cd-archive/1.0 (local catalog enrichment; https://musicbrainz.org/doc/MusicBrainz_API)"
 MUSICBRAINZ_DELAY_SECONDS = 1.1
-ENV_PATH = ROOT / ".env"
 LASTFM_PLACEHOLDER_IMAGE_ID = "2a96cbd8b46e442fc41c2b86b821562f"
 
 

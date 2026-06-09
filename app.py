@@ -4,6 +4,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import mimetypes
 import os
 import secrets
 import sqlite3
@@ -11,13 +12,37 @@ import sys
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 
 ROOT = Path(__file__).resolve().parent
-DB_PATH = ROOT / "data" / "cd_catalog.sqlite"
+ENV_PATH = Path(os.environ.get("ENV_PATH", ROOT / ".env")).expanduser()
+
+
+def preload_dotenv(path=ENV_PATH):
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def env_path(name, default):
+    return Path(os.environ.get(name, default)).expanduser()
+
+
+preload_dotenv()
+
+DB_PATH = env_path("DATABASE_PATH", ROOT / "data" / "cd_catalog.sqlite")
 STATIC_DIR = ROOT / "web"
-COVER_DIR = STATIC_DIR / "covers"
+COVER_DIR = env_path("COVER_DIR", STATIC_DIR / "covers")
+ARTIST_IMAGE_DIR = env_path("ARTIST_IMAGE_DIR", STATIC_DIR / "artist-images")
 sys.path.insert(0, str(ROOT))
 from scripts.build_database import (
     cached_json,
@@ -404,6 +429,26 @@ class CatalogHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
+    def send_persistent_file(self, root, url_prefix, parsed):
+        relative = unquote(parsed.path.removeprefix(url_prefix)).lstrip("/")
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return True
+        if not candidate.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return True
+        content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        data = candidate.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
     def session_cookie(self):
         cookie = self.headers.get("Cookie", "")
         for part in cookie.split(";"):
@@ -477,6 +522,12 @@ class CatalogHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if not self.is_public_path(parsed) and not self.require_auth(parsed):
+            return
+        if parsed.path.startswith("/covers/"):
+            self.send_persistent_file(COVER_DIR, "/covers/", parsed)
+            return
+        if parsed.path.startswith("/artist-images/"):
+            self.send_persistent_file(ARTIST_IMAGE_DIR, "/artist-images/", parsed)
             return
         if parsed.path == "/api/albums":
             self.handle_albums(parsed)

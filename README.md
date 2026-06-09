@@ -29,10 +29,10 @@ Every album keeps normalized provider records in `external_metadata`, one row pe
 | Path | Purpose |
 | --- | --- |
 | `data/CD Catalog.csv` | Source spreadsheet export. |
-| `data/cd_catalog.sqlite` | Generated SQLite database used by the app. |
+| `data/cd_catalog.sqlite` | Generated SQLite database used by the app unless `DATABASE_PATH` points elsewhere. |
 | `web/` | Static frontend files served by `app.py`. |
-| `web/covers/` | Locally cached album cover images. |
-| `web/artist-images/` | Locally cached Last.fm artist images. |
+| `web/covers/` | Locally cached album cover images unless `COVER_DIR` points elsewhere. |
+| `web/artist-images/` | Locally cached Last.fm artist images unless `ARTIST_IMAGE_DIR` points elsewhere. |
 | `.env` | Local API tokens. This file should not be committed. |
 | `.env.example` | Template showing supported token names. |
 | `scripts/build_database.py` | CSV import, schema creation, API enrichment, cache writes, and manual URL enrichment helpers. |
@@ -48,6 +48,17 @@ LASTFM_API_KEY=your_lastfm_api_key
 APP_USERNAME=admin
 APP_PASSWORD=change_this_password
 ```
+
+Optional persistent storage variables:
+
+```sh
+DATABASE_PATH=/var/lib/radio1190-archive/data/cd_catalog.sqlite
+COVER_DIR=/var/lib/radio1190-archive/covers
+ARTIST_IMAGE_DIR=/var/lib/radio1190-archive/artist-images
+ENV_PATH=/etc/radio1190-archive.env
+```
+
+On a server, use paths outside the repository for the SQLite database and cached images. That lets you update code with `git pull` without replacing live catalog data or downloaded artwork.
 
 MusicBrainz does not require a token, but the script identifies itself with a user agent and rate-limits normal MusicBrainz lookups.
 
@@ -104,8 +115,8 @@ Notes:
 - Discogs enrichment is skipped when `DISCOGS_TOKEN` is not set.
 - Last.fm album and artist enrichment is skipped when `LASTFM_API_KEY` is not set.
 - The script rebuilds the main catalog schema each time it runs. API payloads are cached in SQLite during a run and reused on later enrichment calls unless `--refresh-cache` is supplied.
-- Cover images are saved under `web/covers/`.
-- Artist images are saved under `web/artist-images/`.
+- Cover images are saved under `COVER_DIR`, defaulting to `web/covers/`.
+- Artist images are saved under `ARTIST_IMAGE_DIR`, defaulting to `web/artist-images/`.
 
 ### `scripts/install_debian_service.sh`
 
@@ -122,7 +133,9 @@ The script:
 - Writes a service unit to `/etc/systemd/system/radio1190-archive.service` by default.
 - Sets the service working directory to this repository.
 - Runs `app.py` with Python.
-- Sets `PORT=8190` in the service environment.
+- Loads `/etc/radio1190-archive.env` when it exists.
+- Sets `HOST`, `PORT`, `DATABASE_PATH`, `COVER_DIR`, `ARTIST_IMAGE_DIR`, and `ENV_PATH` in the service environment.
+- Creates the persistent data and image directories.
 - Runs `systemctl daemon-reload`.
 - Enables the service at boot.
 - Restarts the service immediately.
@@ -136,7 +149,13 @@ Default values:
 | `APP_DIR` | repository root | Directory containing `app.py`. |
 | `RUN_USER` | the sudoing user | Linux user account that runs the app. |
 | `PYTHON_BIN` | `/usr/bin/python3` | Python executable used by the service. |
+| `HOST` | `0.0.0.0` | Bind address for the web app. |
 | `PORT` | `8190` | Port passed to the app. |
+| `DATA_DIR` | `/var/lib/radio1190-archive` | Base directory for persistent server data. |
+| `ENV_FILE` | `/etc/radio1190-archive.env` | Environment file loaded by systemd and used as `ENV_PATH`. |
+| `DATABASE_PATH` | `$DATA_DIR/data/cd_catalog.sqlite` | Live SQLite database path. |
+| `COVER_DIR` | `$DATA_DIR/covers` | Live album cover cache path. |
+| `ARTIST_IMAGE_DIR` | `$DATA_DIR/artist-images` | Live artist image cache path. |
 
 Override values by setting environment variables before `sudo`. Preserve them with `sudo -E`:
 
@@ -175,6 +194,80 @@ SERVICE_NAME=my-archive sudo -E scripts/restart_debian_service.sh
 ```
 
 This script must use `sudo` because restarting a system service requires root privileges.
+
+## Move Server Data Outside The Repo
+
+Use this once on the Debian server after pulling code that supports `DATABASE_PATH`, `COVER_DIR`, and `ARTIST_IMAGE_DIR`. These commands copy data first and leave the original files in place until you verify the app.
+
+Stop the service:
+
+```sh
+sudo systemctl stop radio1190-archive.service
+```
+
+Create persistent directories:
+
+```sh
+sudo install -d -o "$USER" -g "$USER" /var/lib/radio1190-archive/data
+sudo install -d -o "$USER" -g "$USER" /var/lib/radio1190-archive/covers
+sudo install -d -o "$USER" -g "$USER" /var/lib/radio1190-archive/artist-images
+```
+
+Copy the live database and cached images without deleting the originals:
+
+```sh
+cp -n data/cd_catalog.sqlite /var/lib/radio1190-archive/data/
+cp -an web/covers/. /var/lib/radio1190-archive/covers/
+cp -an web/artist-images/. /var/lib/radio1190-archive/artist-images/
+```
+
+Create the server environment file:
+
+```sh
+sudo tee /etc/radio1190-archive.env >/dev/null <<'EOF'
+DISCOGS_TOKEN=your_discogs_token
+LASTFM_API_KEY=your_lastfm_api_key
+APP_USERNAME=admin
+APP_PASSWORD=change_this_password
+DATABASE_PATH=/var/lib/radio1190-archive/data/cd_catalog.sqlite
+COVER_DIR=/var/lib/radio1190-archive/covers
+ARTIST_IMAGE_DIR=/var/lib/radio1190-archive/artist-images
+EOF
+```
+
+Use your real token and password values. Keep this file out of git.
+
+Reinstall the systemd unit so it points at persistent storage:
+
+```sh
+sudo -E scripts/install_debian_service.sh
+```
+
+Verify the service and paths:
+
+```sh
+sudo systemctl status radio1190-archive.service --no-pager
+sudo journalctl -u radio1190-archive.service -n 80 --no-pager
+curl -i http://localhost:8190/
+```
+
+After verification, update code with:
+
+```sh
+git pull
+sudo scripts/restart_debian_service.sh
+```
+
+Avoid deployment commands that delete untracked files inside the repo, such as `git clean -fdx`, `git reset --hard` followed by copying a fresh tree, or `rsync --delete`, unless you have confirmed the live database and image directories are outside the repo and backed up.
+
+Recommended backup before major updates:
+
+```sh
+sqlite3 /var/lib/radio1190-archive/data/cd_catalog.sqlite ".backup '/var/lib/radio1190-archive/data/cd_catalog-$(date +%F-%H%M).sqlite'"
+tar -czf "/var/lib/radio1190-archive/images-$(date +%F-%H%M).tgz" \
+  /var/lib/radio1190-archive/covers \
+  /var/lib/radio1190-archive/artist-images
+```
 
 ## Run The App
 
@@ -415,21 +508,22 @@ erDiagram
 ```mermaid
 flowchart LR
     CSV["data/CD Catalog.csv"] --> Builder["scripts/build_database.py"]
-    Env[".env tokens"] --> Builder
+    Env[".env or /etc/radio1190-archive.env"] --> Builder
+    Env --> App["app.py JSON API"]
 
-    Builder --> DB[("data/cd_catalog.sqlite")]
-    Builder --> Covers["web/covers/"]
-    Builder --> ArtistImages["web/artist-images/"]
+    Builder --> DB[("DATABASE_PATH")]
+    Builder --> Covers["COVER_DIR"]
+    Builder --> ArtistImages["ARTIST_IMAGE_DIR"]
 
     MusicBrainz["MusicBrainz API"] --> Builder
     Discogs["Discogs API"] --> Builder
     LastFM["Last.fm API"] --> Builder
     CoverArchive["Cover Art Archive"] --> Builder
 
-    DB --> App["app.py JSON API"]
+    DB --> App
     Covers --> App
     ArtistImages --> App
-    Web["web/index.html + app.js + styles.css"] --> Browser["Browser UI"]
+    Web["repo web/ static files"] --> Browser["Browser UI"]
     App --> Browser
 
     Browser --> ManualURL["Edit form Match to this Album URL"]
