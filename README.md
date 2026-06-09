@@ -114,7 +114,7 @@ Album detail views include `Edit` and `Delete` buttons. Edit updates the catalog
 
 The Add/Edit form includes:
 
-- Spreadsheet/catalog fields such as timestamp, `1190_ID`, artist, album title, version, case status, notes, and other.
+- Spreadsheet/catalog fields such as timestamp, `1190_ID`, artist, album title, version, case status, notes, and other. New albums pre-populate timestamp with the current local date/time.
 - Extended catalog fields: label, format, compilation, country, released, and genre.
 - Optional album cover upload.
 
@@ -130,19 +130,24 @@ The Add/Edit form includes:
 - Click a record label to show all releases from that label.
 - `Hide N/A albums` defaults on and hides rows where both artist and album are `N/A`.
 - The `Music Service` column lists the services matched for each album.
+- The catalog `format` value is highlighted when cached API formats do not include that format.
 - `Add` opens the Add Album form.
 - Album details include `Edit` and `Delete`.
 - Compilation track artists are clickable when a track is displayed as `Artist - Song`.
 - Album covers and artist images open in a lightbox.
+- Artist images and Last.fm bios appear at the bottom of the sidebar when available; long bios are truncated with a full-bio link.
 - Apple/iTunes preview code is present but currently disabled.
 
 ## Database ERD
+
+`external_metadata` is the normalized music-service table. MusicBrainz, Discogs, and Last.fm are all represented there as peer providers. `musicbrainz_metadata` is shown separately only because the app still keeps a MusicBrainz-specific release detail cache for richer fields from earlier builds; it is not the master service model.
 
 ```mermaid
 erDiagram
     ALBUMS {
         integer id PK
         integer row_number
+        text timestamp
         text catalog_number
         text media_format
         text artist
@@ -167,9 +172,12 @@ erDiagram
         integer id PK
         text name UK
         text lookup_status
+        text lookup_error
+        text fetched_at
         text lastfm_mbid
         text lastfm_url
         text bio_summary
+        text bio_content
         text image_url
         text local_image_url
         text raw_json
@@ -178,15 +186,25 @@ erDiagram
     MUSICBRAINZ_METADATA {
         integer album_id PK
         text lookup_status
+        text lookup_error
+        text fetched_at
         text mb_release_id
         text title
         text artist_credit
         text date
         text country
+        text status
+        text barcode
+        text asin
+        text release_group_id
+        text release_group_primary_type
+        text release_group_secondary_types
         text label_names
         text catalog_numbers
         text format
         integer track_count
+        integer score
+        text disambiguation
         text mb_url
         text raw_json
     }
@@ -195,6 +213,7 @@ erDiagram
         integer id PK
         integer album_id FK
         integer medium_position
+        text medium_title
         text medium_format
         integer track_position
         text track_number
@@ -216,10 +235,15 @@ erDiagram
         integer album_id FK
         text source
         text image_id
+        text types
+        integer is_front
+        integer is_back
+        integer approved
         text image_url
         text thumbnail_small
         text thumbnail_large
         text local_image_url
+        text comment
         text raw_json
     }
 
@@ -228,6 +252,7 @@ erDiagram
         text provider PK
         text lookup_status
         integer found
+        text fetched_at
         text external_id
         text title
         text url
@@ -239,6 +264,8 @@ erDiagram
         integer album_id FK
         text provider
         text lookup_status
+        text lookup_error
+        text fetched_at
         text external_id
         text url
         text title
@@ -320,5 +347,4 @@ flowchart LR
 - `tracks` can be populated from MusicBrainz or Discogs. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.
 - `album_service_status` records whether each service was found, not found, errored, or not configured.
 - Album art and artist images are stored as local files and referenced by local web paths.
-- `api_cache` prevents repeated API hits when metadata has already been downloaded.
 - The app is intended for local use and does not implement authentication.
