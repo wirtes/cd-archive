@@ -45,7 +45,13 @@ COVER_DIR = env_path("COVER_DIR", ROOT / "web" / "covers")
 ARTIST_IMAGE_DIR = env_path("ARTIST_IMAGE_DIR", ROOT / "web" / "artist-images")
 
 USER_AGENT = "cd-archive/1.0 (local catalog enrichment; https://musicbrainz.org/doc/MusicBrainz_API)"
-MUSICBRAINZ_DELAY_SECONDS = 1.1
+API_THROTTLE_SECONDS = {
+    "musicbrainz": 1.1,
+    "cover_art_archive": 1.1,
+    "discogs": 1.1,
+    "lastfm": 1.1,
+}
+LAST_API_REQUEST_AT: dict[str, float] = {}
 LASTFM_PLACEHOLDER_IMAGE_ID = "2a96cbd8b46e442fc41c2b86b821562f"
 
 
@@ -334,6 +340,16 @@ def json_request(url: str, headers: dict[str, str] | None = None) -> tuple[int, 
         return exc.code, None, f"HTTP Error {exc.code}: {exc.reason}"
 
 
+def throttle_api_request(provider: str) -> None:
+    delay = API_THROTTLE_SECONDS.get(provider, 1.1)
+    last_request_at = LAST_API_REQUEST_AT.get(provider)
+    if last_request_at is not None:
+        elapsed = time.monotonic() - last_request_at
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+    LAST_API_REQUEST_AT[provider] = time.monotonic()
+
+
 def cached_json(
     conn: sqlite3.Connection,
     provider: str,
@@ -355,6 +371,7 @@ def cached_json(
             raw_json, error = row
             return json.loads(raw_json) if raw_json else None, True, error
 
+    throttle_api_request(provider)
     status_code, payload, error = json_request(url, headers=headers)
     conn.execute(
         """
@@ -1881,8 +1898,6 @@ def enrich_first_albums(conn: sqlite3.Connection, limit: int, refresh_cache: boo
             update_master_catalog_fields(conn, album_id)
             print(f"{row_number:03d}: {artist} - {album_name} -> error: {exc}")
         conn.commit()
-        if not used_musicbrainz_cache and offset != len(rows) - 1:
-            time.sleep(MUSICBRAINZ_DELAY_SECONDS)
 
 
 def main() -> None:

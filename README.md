@@ -60,7 +60,7 @@ ENV_PATH=/etc/radio1190-archive.env
 
 On a server, use paths outside the repository for the SQLite database and cached images. That lets you update code with `git pull` without replacing live catalog data or downloaded artwork.
 
-MusicBrainz does not require a token, but the script identifies itself with a user agent and rate-limits normal MusicBrainz lookups.
+MusicBrainz does not require a token, but the script identifies itself with a user agent. Uncached MusicBrainz, Cover Art Archive, Discogs, and Last.fm API calls are throttled so enrichment stays polite to external services.
 
 The web app requires login for the desktop catalog, mobile add page, and every `/api/*` call. If `APP_USERNAME` or `APP_PASSWORD` are not set, the local defaults are `admin` and `radio1190`; change them before listening on your LAN.
 
@@ -115,6 +115,7 @@ Notes:
 - Discogs enrichment is skipped when `DISCOGS_TOKEN` is not set.
 - Last.fm album and artist enrichment is skipped when `LASTFM_API_KEY` is not set.
 - The script rebuilds the main catalog schema each time it runs. API payloads are cached in SQLite during a run and reused on later enrichment calls unless `--refresh-cache` is supplied.
+- Uncached provider requests are throttled per service. Cached responses return immediately.
 - Cover images are saved under `COVER_DIR`, defaulting to `web/covers/`.
 - Artist images are saved under `ARTIST_IMAGE_DIR`, defaulting to `web/artist-images/`.
 
