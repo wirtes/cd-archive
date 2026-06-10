@@ -26,6 +26,7 @@
 
       <section class="scannerPanel" aria-label="UPC scanner">
         <video id="scannerVideo" playsinline muted></video>
+        <img id="scannerCoverImage" class="scannerCoverImage" alt="" hidden />
         <div class="scannerActions">
           <button id="startScanButton" type="button">Scan UPC</button>
           <button id="stopScanButton" type="button" disabled>Stop</button>
@@ -48,7 +49,7 @@
       </form>
 
       <section class="releaseCard" id="releaseCard" hidden>
-        <img id="releaseImage" alt="" />
+        <img id="releaseImage" class="releaseImage" alt="" />
         <div class="releaseMeta">
           <h2 id="releaseTitle"></h2>
           <p id="releaseArtist"></p>
@@ -139,6 +140,6 @@
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=scanner-5"></script>
+    <script src="/mobile-add.js?v=scanner-cover-1"></script>
   </body>
 </html>

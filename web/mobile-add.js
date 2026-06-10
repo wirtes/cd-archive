@@ -1,4 +1,5 @@
 const videoEl = document.querySelector("#scannerVideo");
+const scannerCoverImage = document.querySelector("#scannerCoverImage");
 const startScanButton = document.querySelector("#startScanButton");
 const stopScanButton = document.querySelector("#stopScanButton");
 const lookupForm = document.querySelector("#lookupForm");
@@ -46,6 +47,33 @@ function setStatus(message, isError = false) {
   statusMessage.classList.toggle("isError", Boolean(message && isError));
 }
 
+function showScannerVideo() {
+  videoEl.hidden = false;
+  if (scannerCoverImage) {
+    scannerCoverImage.hidden = true;
+    scannerCoverImage.removeAttribute("src");
+    scannerCoverImage.alt = "";
+  }
+}
+
+function showScannerCover(payload) {
+  if (isDesktopView() || !scannerCoverImage) return;
+  const album = payload.album || {};
+  scannerCoverImage.src = payload.cover_url || "/images/1190-logo-reversed-300x180.png";
+  scannerCoverImage.alt = `${album.album_name || "Release"} cover`;
+  scannerCoverImage.hidden = false;
+  videoEl.hidden = true;
+}
+
+function clearReleaseState() {
+  currentRelease = null;
+  releaseCard.hidden = true;
+  releaseImage.removeAttribute("src");
+  releaseImage.alt = "";
+  addReleaseButton.disabled = true;
+  if (desktopTopAddButton) desktopTopAddButton.disabled = true;
+}
+
 function cleanBarcode(value) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -88,6 +116,7 @@ function showRelease(payload) {
   releaseImage.alt = `${releaseTitle.textContent} cover`;
   renderDetails(payload);
   populateDesktopForm(album);
+  showScannerCover(payload);
   releaseCard.hidden = false;
   addReleaseButton.disabled = false;
   if (desktopTopAddButton) desktopTopAddButton.disabled = false;
@@ -277,8 +306,18 @@ function stopScanner() {
     scanStream = null;
   }
   videoEl.srcObject = null;
+  if (!currentRelease) showScannerVideo();
   startScanButton.disabled = false;
   stopScanButton.disabled = true;
+}
+
+function resetForNewScan() {
+  stopScanner();
+  clearReleaseState();
+  showScannerVideo();
+  barcodeInput.value = "";
+  if (mobileCatalogInput) mobileCatalogInput.value = "";
+  setStatus("");
 }
 
 function handleScannedBarcode(value) {
@@ -371,6 +410,7 @@ async function startZxingScanner() {
 }
 
 async function startScanner() {
+  resetForNewScan();
   if (isDesktopView()) return;
   if (!window.isSecureContext) {
     setStatus("Camera scanning requires HTTPS or localhost. Enter the UPC manually on this connection.", true);

@@ -125,12 +125,25 @@ main {
   padding: 12px;
 }
 
-video {
+video,
+.scannerCoverImage {
   width: 100%;
   aspect-ratio: 4 / 3;
   border-radius: 4px;
   background: #111820;
+}
+
+video {
   object-fit: cover;
+}
+
+.scannerCoverImage {
+  display: block;
+  object-fit: contain;
+}
+
+.scannerCoverImage[hidden] {
+  display: none;
 }
 
 .scannerActions,
@@ -206,6 +219,10 @@ button:disabled {
   max-height: 48vh;
   background: #f4f6f8;
   object-fit: contain;
+}
+
+.releaseCard .releaseImage {
+  display: none;
 }
 
 .releaseMeta {
@@ -303,6 +320,10 @@ dd {
   .desktopQrPanel img {
     width: min(240px, 100%);
     height: auto;
+  }
+
+  .releaseCard .releaseImage {
+    display: block;
   }
 
   .desktopAddPanel {
