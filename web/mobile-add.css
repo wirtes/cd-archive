@@ -240,6 +240,10 @@ video {
   gap: 10px;
 }
 
+.scannerActions {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
 .lookupForm {
   display: grid;
   gap: 8px;
@@ -561,6 +565,16 @@ dd {
 
   .desktopTopAddButton {
     min-width: 104px;
+  }
+
+  .desktopPanelActions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  #desktopClearButton {
+    min-width: 84px;
   }
 
   .desktopAddForm {

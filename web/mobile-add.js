@@ -2,6 +2,7 @@ const videoEl = document.querySelector("#scannerVideo");
 const scannerCoverImage = document.querySelector("#scannerCoverImage");
 const startScanButton = document.querySelector("#startScanButton");
 const stopScanButton = document.querySelector("#stopScanButton");
+const clearButton = document.querySelector("#clearButton");
 const lookupForm = document.querySelector("#lookupForm");
 const barcodeInput = document.querySelector("#barcodeInput");
 const mobileCatalogInput = document.querySelector("#mobileCatalogInput");
@@ -13,6 +14,7 @@ const releaseArtist = document.querySelector("#releaseArtist");
 const releaseDetails = document.querySelector("#releaseDetails");
 const addReleaseButton = document.querySelector("#addReleaseButton");
 const desktopTopAddButton = document.querySelector("#desktopTopAddButton");
+const desktopClearButton = document.querySelector("#desktopClearButton");
 const desktopAddForm = document.querySelector("#desktopAddForm");
 const desktopListenerStatus = document.querySelector("#desktopListenerStatus");
 const desktopLoadServiceButton = document.querySelector("#desktopLoadServiceButton");
@@ -645,6 +647,8 @@ lookupForm.addEventListener("submit", (event) => {
 
 startScanButton.addEventListener("click", startScanner);
 stopScanButton.addEventListener("click", stopScanner);
+clearButton?.addEventListener("click", resetForNewScan);
+desktopClearButton?.addEventListener("click", resetForNewScan);
 addReleaseButton.addEventListener("click", addCurrentRelease);
 desktopTopAddButton?.addEventListener("click", addCurrentRelease);
 desktopLoadServiceButton?.addEventListener("click", loadDesktopServiceUrl);

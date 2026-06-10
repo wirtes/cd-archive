@@ -3,19 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Admin · Radio 1190 Music Archive</title>
+    <title>Admin · Radio 1190 Catalog</title>
+    <link rel="icon" href="/images/favicon.ico" />
     <link rel="stylesheet" href="/login.css" />
-    <link rel="stylesheet" href="/admin.css?v=archive-header-1" />
+    <link rel="stylesheet" href="/admin.css?v=user-edit-1" />
   </head>
   <body class="adminPage">
     <header class="topbar pageHeader">
       <div class="brandBlock">
-        <a class="logoLink" href="/" aria-label="Radio 1190 Music Archive home">
+        <a class="logoLink" href="/" aria-label="Radio 1190 Catalog home">
           <img class="siteLogo" src="/images/1190-logo-reversed-300x180.png" alt="Radio 1190" />
         </a>
         <div>
           <h1><a class="homeLink" href="/">Admin</a></h1>
-          <p>Manage access to the Radio 1190 Music Archive.</p>
+          <p>Manage access to the Radio 1190 Catalog.</p>
         </div>
       </div>
       <div class="userControls">
@@ -25,7 +26,7 @@
             <span class="hamburgerIcon" aria-hidden="true"><span></span><span></span><span></span></span>
           </button>
           <div id="accountMenu" class="accountMenu" role="menu" hidden>
-            <a href="/" role="menuitem">Archive</a>
+            <a href="/" role="menuitem">Catalog</a>
             <a href="/mobile-add.html" role="menuitem">Mobile Add</a>
             <button id="logoutButton" type="button" role="menuitem">Logout</button>
           </div>
@@ -35,13 +36,24 @@
     <main class="adminShell">
       <section class="adminGrid">
         <form class="loginForm adminForm" id="userForm">
+        <h2 id="userFormTitle">Create User</h2>
         <label>
           <span>Username</span>
           <input name="username" required />
         </label>
         <label>
           <span>Password</span>
-          <input name="password" type="password" required />
+          <input name="password" type="password" />
+        </label>
+        <p class="formHelp">Leave password blank when editing to keep the existing password.</p>
+        <div class="roleHelp">
+          <p>All active users can search the catalog.</p>
+          <p>Editors can add, edit, and delete records.</p>
+          <p>Admins can manage users.</p>
+        </div>
+        <label class="roleOption">
+          <input name="is_active" type="checkbox" checked />
+          <span>Active</span>
         </label>
         <label class="roleOption">
           <input name="is_admin" type="checkbox" />
@@ -51,13 +63,16 @@
           <input name="is_editor" type="checkbox" />
           <span>Editor</span>
         </label>
-        <button type="submit">Save User</button>
+        <div class="adminFormActions">
+          <button type="submit">Save User</button>
+          <button type="button" id="clearUserForm">Clear</button>
+        </div>
         <p id="loginMessage" role="status" aria-live="polite"></p>
       </form>
         <section class="userPanel" id="userList" aria-live="polite"></section>
       </section>
-      <a class="backLink" href="/">Back to archive</a>
+      <a class="backLink" href="/">Back to catalog</a>
     </main>
-    <script src="/admin.js?v=archive-header-1"></script>
+    <script src="/admin.js?v=user-edit-1"></script>
   </body>
 </html>

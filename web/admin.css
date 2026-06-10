@@ -169,6 +169,32 @@
   width: 100%;
 }
 
+.adminForm h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.formHelp,
+.roleHelp {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.roleHelp {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--soft);
+}
+
+.roleHelp p {
+  margin: 0;
+}
+
 .roleOption {
   display: flex;
   align-items: center;
@@ -185,6 +211,22 @@
   min-height: 18px;
   height: 18px;
   margin: 0;
+}
+
+.adminFormActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.adminFormActions button {
+  flex: 1;
+}
+
+.adminFormActions button[type="button"] {
+  border-color: #cbd4dc;
+  background: #ffffff;
+  color: var(--ink);
 }
 
 .userPanel {
@@ -211,9 +253,10 @@
 }
 
 .userPanel li {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
@@ -226,6 +269,17 @@
 
 .userPanel strong {
   color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.userPanel button {
+  min-height: 30px;
+  padding: 0 10px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 760;
 }
 
 .backLink {

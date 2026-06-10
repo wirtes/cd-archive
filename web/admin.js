@@ -5,6 +5,23 @@ const sessionUser = document.querySelector("#sessionUser");
 const accountMenuButton = document.querySelector("#accountMenuButton");
 const accountMenu = document.querySelector("#accountMenu");
 const logoutButton = document.querySelector("#logoutButton");
+const clearUserFormButton = document.querySelector("#clearUserForm");
+const userFormTitle = document.querySelector("#userFormTitle");
+
+let users = [];
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value);
+}
 
 function setAccountMenuOpen(open) {
   if (!accountMenuButton || !accountMenu) return;
@@ -18,9 +35,31 @@ function toggleAccountMenu() {
 
 function roleText(user) {
   const roles = [];
+  if (!user.is_active) roles.push("inactive");
   if (user.is_admin) roles.push("admin");
   if (user.is_editor) roles.push("editor");
-  return roles.join(", ") || "viewer";
+  return roles.join(", ") || "active viewer";
+}
+
+function resetUserForm(clearMessage = true) {
+  userForm.reset();
+  userForm.elements.username.readOnly = false;
+  userForm.elements.is_active.checked = true;
+  if (userFormTitle) userFormTitle.textContent = "Create User";
+  if (clearMessage) message.textContent = "";
+}
+
+function editUser(username) {
+  const user = users.find((item) => item.username === username);
+  if (!user) return;
+  userForm.elements.username.value = user.username;
+  userForm.elements.username.readOnly = true;
+  userForm.elements.password.value = "";
+  userForm.elements.is_active.checked = Boolean(user.is_active);
+  userForm.elements.is_admin.checked = Boolean(user.is_admin);
+  userForm.elements.is_editor.checked = Boolean(user.is_editor);
+  if (userFormTitle) userFormTitle.textContent = `Edit ${user.username}`;
+  message.textContent = "Leave password blank to keep it unchanged.";
 }
 
 async function loadUsers() {
@@ -39,11 +78,20 @@ async function loadUsers() {
   }
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Unable to load users.");
+  users = payload.users || [];
   userList.innerHTML = `
     <h2>Users</h2>
     <ul>
-      ${(payload.users || [])
-        .map((user) => `<li><strong>${user.username}</strong><span>${roleText(user)}</span></li>`)
+      ${users
+        .map(
+          (user) => `
+            <li>
+              <strong>${escapeHtml(user.username)}</strong>
+              <span>${escapeHtml(roleText(user))}</span>
+              <button type="button" data-edit-user="${escapeAttribute(user.username)}">Edit</button>
+            </li>
+          `
+        )
         .join("")}
     </ul>
   `;
@@ -60,19 +108,28 @@ userForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         username: form.get("username"),
         password: form.get("password"),
+        is_active: Boolean(form.get("is_active")),
         is_admin: Boolean(form.get("is_admin")),
         is_editor: Boolean(form.get("is_editor")),
       }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Unable to save user.");
+    resetUserForm(false);
     message.textContent = `${payload.username} saved.`;
-    userForm.reset();
     loadUsers();
   } catch (error) {
     message.textContent = error.message;
   }
 });
+
+userList.addEventListener("click", (event) => {
+  const editButton = event.target.closest("[data-edit-user]");
+  if (!editButton) return;
+  editUser(editButton.dataset.editUser);
+});
+
+clearUserFormButton?.addEventListener("click", resetUserForm);
 
 async function logout() {
   await fetch("/api/logout", { method: "POST" });

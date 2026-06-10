@@ -45,18 +45,25 @@ COVER_DIR = env_path("COVER_DIR", STATIC_DIR / "covers")
 ARTIST_IMAGE_DIR = env_path("ARTIST_IMAGE_DIR", STATIC_DIR / "artist-images")
 sys.path.insert(0, str(ROOT))
 from scripts.build_database import (
+    apple_track_is_explicit,
     apple_track_rows,
     apply_apple_track_explicitness,
     cached_json,
     create_schema,
     discogs_cover_url,
     discogs_is_compilation,
+    discogs_track_artist,
+    duration_to_ms,
     enrich_album_from_discogs_url,
     enrich_album_from_service_url,
     fetch_apple_collection_id,
     first_joined,
+    flatten_discogs_tracks,
     is_various_artist,
     load_dotenv,
+    select_apple_album,
+    select_apple_album_from_song_results,
+    track_match_keys,
     value_from_mapping_or_string,
 )
 
@@ -70,6 +77,7 @@ PUBLIC_PATHS = {
     "/login.css",
     "/login.js",
     "/api/login",
+    "/images/favicon.ico",
     "/images/1190-logo-reversed-300x180.png",
 }
 
@@ -258,6 +266,81 @@ def discogs_mobile_album(payload):
     }
 
 
+def discogs_preview_tracks(payload):
+    tracks = []
+    for index, track in enumerate(flatten_discogs_tracks(payload.get("tracklist") or []), start=1):
+        title = track.get("title")
+        artist = discogs_track_artist(track)
+        display_title = f"{artist} - {title}" if artist and title else title
+        if not display_title:
+            continue
+        tracks.append(
+            {
+                "track_position": index,
+                "track_number": clean_text(track.get("position")) or str(index),
+                "title": display_title,
+                "length_ms": duration_to_ms(track.get("duration")),
+                "explicit": False,
+                "recording_id": f"discogs:{payload.get('id')}:{track.get('position') or index}",
+            }
+        )
+    return tracks
+
+
+def apple_preview_tracks(conn, artist, album_name):
+    if not artist or not album_name:
+        return []
+    query = f"{artist} {album_name}".strip()
+    search_url = f"https://itunes.apple.com/search?{urlencode({'term': query, 'media': 'music', 'entity': 'album', 'limit': '25', 'country': 'US'})}"
+    search_payload, _, error = cached_json(conn, "apple_itunes", f"album-search:{query}", search_url, refresh_cache=False)
+    selected = select_apple_album((search_payload or {}).get("results") or [], artist, album_name) if not error else None
+    if not selected and not error:
+        song_url = f"https://itunes.apple.com/search?{urlencode({'term': album_name, 'media': 'music', 'entity': 'song', 'attribute': 'albumTerm', 'limit': '50', 'country': 'US'})}"
+        song_payload, _, song_error = cached_json(conn, "apple_itunes", f"album-song-search:{album_name}", song_url, refresh_cache=False)
+        if not song_error:
+            selected = select_apple_album_from_song_results((song_payload or {}).get("results") or [], artist, album_name)
+    if not selected or not selected.get("collectionId"):
+        return []
+    collection_id = selected["collectionId"]
+    lookup_url = f"https://itunes.apple.com/lookup?{urlencode({'id': collection_id, 'entity': 'song', 'country': 'US'})}"
+    lookup_payload, _, lookup_error = cached_json(conn, "apple_itunes", f"collection:{collection_id}", lookup_url, refresh_cache=False)
+    if lookup_error:
+        return []
+    return apple_track_rows(lookup_payload or {})
+
+
+def apply_apple_explicit_flags_to_preview_tracks(tracks, apple_tracks):
+    apple_by_title = {}
+    for track in apple_tracks:
+        for key in track_match_keys(track.get("trackName")):
+            apple_by_title[key] = track
+    if not apple_by_title:
+        return tracks
+    for track in tracks:
+        apple_track = next((apple_by_title.get(key) for key in track_match_keys(track.get("title")) if key in apple_by_title), None)
+        if not apple_track:
+            continue
+        track["explicit"] = apple_track_is_explicit(apple_track)
+        if apple_track.get("trackId"):
+            track["recording_id"] = f"apple_itunes:{apple_track['trackId']}"
+    return tracks
+
+
+def apple_tracks_as_preview_tracks(apple_tracks):
+    return [
+        {
+            "track_position": index,
+            "track_number": clean_text(track.get("trackNumber")) or str(index),
+            "title": clean_text(track.get("trackName")),
+            "length_ms": track.get("trackTimeMillis"),
+            "explicit": apple_track_is_explicit(track),
+            "recording_id": f"apple_itunes:{track.get('trackId') or index}",
+        }
+        for index, track in enumerate(apple_tracks, start=1)
+        if clean_text(track.get("trackName"))
+    ]
+
+
 def utc_now():
     return dt.datetime.now(dt.UTC).isoformat()
 
@@ -288,10 +371,14 @@ def ensure_database_schema():
                 password_hash TEXT NOT NULL,
                 is_admin INTEGER NOT NULL DEFAULT 0,
                 is_editor INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
             )
             """
         )
+        user_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "is_active" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS scan_events (
@@ -309,12 +396,13 @@ def ensure_database_schema():
         if default_user and default_password:
             conn.execute(
                 """
-                INSERT INTO users (username, password_hash, is_admin, is_editor, created_at)
-                VALUES (?, ?, 1, 1, ?)
+                INSERT INTO users (username, password_hash, is_admin, is_editor, is_active, created_at)
+                VALUES (?, ?, 1, 1, 1, ?)
                 ON CONFLICT(username) DO UPDATE SET
                     password_hash = excluded.password_hash,
                     is_admin = CASE WHEN users.is_admin = 1 THEN 1 ELSE excluded.is_admin END,
-                    is_editor = CASE WHEN users.is_editor = 1 THEN 1 ELSE excluded.is_editor END
+                    is_editor = CASE WHEN users.is_editor = 1 THEN 1 ELSE excluded.is_editor END,
+                    is_active = 1
                 """,
                 (default_user, password_hash(default_password), utc_now()),
             )
@@ -475,10 +563,10 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         with self.db() as conn:
             row = conn.execute(
                 """
-                SELECT auth_sessions.username, users.is_admin, users.is_editor
+                SELECT auth_sessions.username, users.is_admin, users.is_editor, users.is_active
                 FROM auth_sessions
                 JOIN users ON users.username = auth_sessions.username
-                WHERE auth_sessions.token_hash = ?
+                WHERE auth_sessions.token_hash = ? AND users.is_active = 1
                 """,
                 (self.token_hash(token),),
             ).fetchone()
@@ -635,11 +723,14 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         password = str(payload.get("password") or "")
         with self.db() as conn:
             row = conn.execute(
-                "SELECT username, password_hash, is_admin, is_editor FROM users WHERE username = ?",
+                "SELECT username, password_hash, is_admin, is_editor, is_active FROM users WHERE username = ?",
                 (username,),
             ).fetchone()
             if not row or not hmac.compare_digest(row["password_hash"], password_hash(password)):
                 self.send_json({"error": "Invalid username or password."}, HTTPStatus.UNAUTHORIZED)
+                return
+            if not row["is_active"]:
+                self.send_json({"error": "This user account is inactive."}, HTTPStatus.FORBIDDEN)
                 return
             token = secrets.token_urlsafe(32)
             conn.execute(
@@ -732,7 +823,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             return
         with self.db() as conn:
             rows = conn.execute(
-                "SELECT username, is_admin, is_editor, created_at FROM users ORDER BY username"
+                "SELECT username, is_admin, is_editor, is_active, created_at FROM users ORDER BY username"
             ).fetchall()
         self.send_json(
             {
@@ -741,6 +832,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                         "username": row["username"],
                         "is_admin": bool(row["is_admin"]),
                         "is_editor": bool(row["is_editor"]),
+                        "is_active": bool(row["is_active"]),
                         "created_at": row["created_at"],
                     }
                     for row in rows
@@ -760,23 +852,49 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         password = str(payload.get("password") or "")
         is_admin = 1 if payload.get("is_admin") else 0
         is_editor = 1 if payload.get("is_editor") else 0
-        if not username or not password:
-            self.send_json({"error": "Username and password are required."}, HTTPStatus.BAD_REQUEST)
+        is_active = 1 if payload.get("is_active", True) else 0
+        if not username:
+            self.send_json({"error": "Username is required."}, HTTPStatus.BAD_REQUEST)
             return
         with self.db() as conn:
-            conn.execute(
-                """
-                INSERT INTO users (username, password_hash, is_admin, is_editor, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(username) DO UPDATE SET
-                    password_hash = excluded.password_hash,
-                    is_admin = excluded.is_admin,
-                    is_editor = excluded.is_editor
-                """,
-                (username, password_hash(password), is_admin, is_editor, utc_now()),
-            )
+            existing = conn.execute("SELECT username FROM users WHERE username = ?", (username,)).fetchone()
+            if not existing and not password:
+                self.send_json({"error": "Password is required for new users."}, HTTPStatus.BAD_REQUEST)
+                return
+            if password:
+                conn.execute(
+                    """
+                    INSERT INTO users (username, password_hash, is_admin, is_editor, is_active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(username) DO UPDATE SET
+                        password_hash = excluded.password_hash,
+                        is_admin = excluded.is_admin,
+                        is_editor = excluded.is_editor,
+                        is_active = excluded.is_active
+                    """,
+                    (username, password_hash(password), is_admin, is_editor, is_active, utc_now()),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET is_admin = ?, is_editor = ?, is_active = ?
+                    WHERE username = ?
+                    """,
+                    (is_admin, is_editor, is_active, username),
+                )
+            if not is_active:
+                conn.execute("DELETE FROM auth_sessions WHERE username = ?", (username,))
             conn.commit()
-        self.send_json({"username": username, "is_admin": bool(is_admin), "is_editor": bool(is_editor)}, HTTPStatus.CREATED)
+        self.send_json(
+            {
+                "username": username,
+                "is_admin": bool(is_admin),
+                "is_editor": bool(is_editor),
+                "is_active": bool(is_active),
+            },
+            HTTPStatus.CREATED,
+        )
 
     def handle_albums(self, parsed):
         params = parse_qs(parsed.query)
@@ -1134,6 +1252,13 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 if detail_error or not detail_payload:
                     self.send_json({"error": detail_error or "Discogs release detail was not found."}, HTTPStatus.NOT_FOUND)
                     return
+                album = discogs_mobile_album(detail_payload)
+                tracks = discogs_preview_tracks(detail_payload)
+                apple_tracks = apple_preview_tracks(conn, album.get("artist"), album.get("album_name"))
+                if tracks:
+                    apply_apple_explicit_flags_to_preview_tracks(tracks, apple_tracks)
+                elif apple_tracks:
+                    tracks = apple_tracks_as_preview_tracks(apple_tracks)
                 conn.commit()
         except Exception as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -1145,9 +1270,10 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 "barcode": barcode,
                 "release_url": discogs_release_url(detail_payload),
                 "cover_url": cover_url,
-                "track_count": len(detail_payload.get("tracklist") or []),
+                "track_count": len(tracks),
+                "tracks": tracks,
                 "barcodes": discogs_barcodes(detail_payload),
-                "album": discogs_mobile_album(detail_payload),
+                "album": album,
                 "discogs": {
                     "id": detail_payload.get("id"),
                     "title": detail_payload.get("title"),
@@ -1515,7 +1641,7 @@ def main():
     port = int(os.environ.get("PORT", DEFAULT_PORT))
     host = os.environ.get("HOST", DEFAULT_HOST)
     server = ThreadingHTTPServer((host, port), CatalogHandler)
-    print(f"Serving CD Archive at http://{host}:{port}")
+    print(f"Serving Radio 1190 Catalog at http://{host}:{port}")
     server.serve_forever()
 
 

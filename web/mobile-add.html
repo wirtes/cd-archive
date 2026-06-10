@@ -3,13 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Add Album · Radio 1190 Music Archive</title>
-    <link rel="stylesheet" href="/mobile-add.css?v=archive-header-track-editor-1" />
+    <title>Add Album · Radio 1190 Catalog</title>
+    <link rel="icon" href="/images/favicon.ico" />
+    <link rel="stylesheet" href="/mobile-add.css?v=clear-user-edit-1" />
   </head>
   <body>
     <header class="topbar pageHeader">
       <div class="brandBlock">
-        <a class="logoLink" href="/" aria-label="Radio 1190 Music Archive home">
+        <a class="logoLink" href="/" aria-label="Radio 1190 Catalog home">
           <img class="siteLogo" src="/images/1190-logo-reversed-300x180.png" alt="Radio 1190" />
         </a>
         <div>
@@ -24,7 +25,7 @@
             <span class="hamburgerIcon" aria-hidden="true"><span></span><span></span><span></span></span>
           </button>
           <div id="accountMenu" class="accountMenu" role="menu" hidden>
-            <a href="/" role="menuitem">Archive</a>
+            <a href="/" role="menuitem">Catalog</a>
             <a id="adminLink" href="/admin.html" role="menuitem" hidden>Admin</a>
             <button id="logoutButton" type="button" role="menuitem">Logout</button>
           </div>
@@ -41,6 +42,7 @@
         <div class="scannerActions">
           <button id="startScanButton" type="button">Scan UPC</button>
           <button id="stopScanButton" type="button" disabled>Stop</button>
+          <button id="clearButton" type="button">Clear</button>
         </div>
       </section>
 
@@ -82,7 +84,10 @@
             <h2>Add Album</h2>
             <p id="desktopListenerStatus">Listening for mobile scans...</p>
           </div>
-          <button class="primaryButton desktopTopAddButton" id="desktopTopAddButton" type="button" disabled>Add Album</button>
+          <div class="desktopPanelActions">
+            <button id="desktopClearButton" type="button">Clear</button>
+            <button class="primaryButton desktopTopAddButton" id="desktopTopAddButton" type="button" disabled>Add Album</button>
+          </div>
         </div>
         <form id="desktopAddForm" class="desktopAddForm">
           <label class="wide desktopServiceLookup">
@@ -178,6 +183,6 @@
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=archive-header-track-editor-1"></script>
+    <script src="/mobile-add.js?v=clear-user-edit-1"></script>
   </body>
 </html>
