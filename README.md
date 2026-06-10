@@ -6,10 +6,10 @@ A local SQLite-backed browser for the Radio 1190 CD catalog. The app imports `da
 
 The original spreadsheet remains the source of truth for supplied catalog rows. The SQLite database extends those rows with a master album record assembled from external services in this priority order:
 
-1. MusicBrainz
+1. Apple iTunes
 2. Discogs
-3. Apple iTunes
-4. Last.fm
+3. Last.fm
+4. MusicBrainz
 
 The master album fields currently filled from those services are:
 
@@ -21,7 +21,7 @@ The master album fields currently filled from those services are:
 
 `format` is catalog-supplied only. The current catalog assumes imported spreadsheet items are CDs, and the web Add/Edit form treats `format` as the single user-facing format field. External services can be used to check whether the supplied format appears in API data, but they do not overwrite the catalog format.
 
-Every album keeps normalized provider records in `external_metadata`, one row per matched or attempted service. MusicBrainz, Discogs, Apple iTunes, and Last.fm are peers in that table. Some services also populate service-specific helper tables when they expose richer data; for example, `musicbrainz_metadata` stores detailed MusicBrainz release fields, Discogs/MusicBrainz can populate editable `tracks`, and Apple iTunes can populate or update track explicit-lyrics flags.
+Every album keeps normalized provider records in `external_metadata`, one row per matched or attempted service. Apple iTunes, Discogs, Last.fm, and MusicBrainz are peers in that table. Some services also populate service-specific helper tables when they expose richer data; for example, `musicbrainz_metadata` stores detailed MusicBrainz release fields, Discogs/MusicBrainz can populate editable `tracks`, and Apple iTunes can populate or update track explicit-lyrics flags.
 
 `Various`, `V/A`, and `VA` are normalized to the special display value `Various Artists`. Compilation rows suppress artist profile display, and compilation tracks rendered as `Artist - Song` make the track artist clickable for an artist search.
 
@@ -557,14 +557,14 @@ flowchart LR
 | `/api/users` | `GET`/`POST` | Admin-only user listing and creation. |
 | `/api/albums/<id>/music-service-url` | `POST` | Submit a MusicBrainz, Discogs, Apple Music/iTunes, or Last.fm album URL for an album. |
 | `/api/stats` | `GET` | Return high-level catalog stats. |
-| `/api/tags` | `GET` | Return tag-cloud data from cached MusicBrainz, Discogs, Apple iTunes, and Last.fm genre/tag/style records. |
+| `/api/tags` | `GET` | Return tag-cloud data from cached Apple iTunes, Discogs, Last.fm, and MusicBrainz genre/tag/style records. |
 
 ## Notes
 
 - `api_cache` stores raw JSON responses keyed by provider and request, so routine rebuilds avoid unnecessary API calls.
-- `external_metadata` stores normalized provider records for MusicBrainz, Discogs, Apple iTunes, and Last.fm.
-- `musicbrainz_metadata` is a service-specific detail/cache table for MusicBrainz release fields. It does not make MusicBrainz the master service model; MusicBrainz also has a normalized row in `external_metadata` like Discogs, Apple iTunes, and Last.fm.
-- `tracks` can be populated from MusicBrainz, Discogs, or Apple iTunes, edited in the Add/Edit form, and marked with `explicit` for explicit lyrics display. Apple iTunes is the source used to update explicit-lyrics flags when a matching Apple album is found. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.
+- `external_metadata` stores normalized provider records for Apple iTunes, Discogs, Last.fm, and MusicBrainz.
+- `musicbrainz_metadata` is a service-specific detail/cache table for MusicBrainz release fields. It does not make MusicBrainz the master service model; MusicBrainz also has a normalized row in `external_metadata` like Apple iTunes, Discogs, and Last.fm.
+- `tracks` prefer Apple iTunes when a matching Apple album is found, can fall back to Discogs or MusicBrainz, can be edited in the Add/Edit form, and are marked with `explicit` from Apple iTunes. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.
 - `album_service_status` records whether each service was found, not found, errored, or not configured.
 - Album art and artist images are stored as local files and referenced by local web paths.
 - The app requires authenticated sessions. Admin users can create users and assign admin/editor roles; users without admin or editor roles can browse but cannot add, edit, or delete catalog rows.

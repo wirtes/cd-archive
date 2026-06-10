@@ -523,10 +523,40 @@ tbody tr.selected:hover {
   gap: 3px;
   margin: 0;
   padding: 0;
-  list-style: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   line-height: 1.35;
+}
+
+.recordingIds summary {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 4px;
+  align-items: start;
+  cursor: pointer;
+  list-style: none;
+}
+
+.recordingIds summary::-webkit-details-marker {
+  display: none;
+}
+
+.recordingIds .turnIcon::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--muted);
+}
+
+.recordingIds[open] .turnIcon::before {
+  content: "▾";
+}
+
+.recordingIds ul {
+  display: grid;
+  gap: 3px;
+  margin: 4px 0 0 16px;
+  padding: 0;
+  list-style: none;
 }
 
 .detail a {

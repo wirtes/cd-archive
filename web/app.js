@@ -222,7 +222,7 @@ function albumPreviewTerm(album) {
 }
 
 function appleAlbumFromServices(album, external) {
-  const providerOrder = ["musicbrainz", "discogs", "apple_itunes", "lastfm"];
+  const providerOrder = ["apple_itunes", "discogs", "lastfm", "musicbrainz"];
   for (const provider of providerOrder) {
     const match = external.find(
       (source) =>
@@ -454,7 +454,20 @@ function renderDetail(payload) {
 function renderRecordingIds(tracks) {
   const ids = [...new Set(tracks.map((track) => track.recording_id).filter(Boolean))];
   if (!ids.length) return "—";
-  return `<ul class="recordingIds">${ids.map((id) => `<li>${escapeHtml(id)}</li>`).join("")}</ul>`;
+  const [firstId, ...rest] = ids;
+  return `
+    <details class="recordingIds">
+      <summary>
+        <span class="turnIcon" aria-hidden="true"></span>
+        <span>${escapeHtml(firstId)}</span>
+      </summary>
+      ${
+        rest.length
+          ? `<ul>${rest.map((id) => `<li>${escapeHtml(id)}</li>`).join("")}</ul>`
+          : ""
+      }
+    </details>
+  `;
 }
 
 function renderServiceBadges(services) {
@@ -491,7 +504,7 @@ function renderGenreChips(genres, external) {
     return true;
   });
   if (!unique.length) return "";
-  return `<div class="chips">${unique.slice(0, 12).map((chip) => `<button type="button" title="Search ${escapeAttribute(chip.source)}" data-genre="${escapeAttribute(chip.name)}">${escapeHtml(chip.name)}</button>`).join("")}</div>`;
+  return `<div class="chips">${unique.slice(0, 12).map((chip) => `<button type="button" title="Search ${escapeAttribute(sourceLabel(chip.source))}" data-genre="${escapeAttribute(chip.name)}">${escapeHtml(chip.name)}</button>`).join("")}</div>`;
 }
 
 function renderProviderBlocks(external) {
@@ -767,7 +780,7 @@ function populateAlbumFormFromAlbum(form, album) {
 }
 
 function bestExternalMatch(external) {
-  const order = ["musicbrainz", "discogs", "apple_itunes", "lastfm"];
+  const order = ["apple_itunes", "discogs", "lastfm", "musicbrainz"];
   for (const provider of order) {
     const match = external.find((item) => item.provider === provider && item.lookup_status === "matched");
     if (match) return match;

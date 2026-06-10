@@ -384,10 +384,10 @@ def get_album_bundle(conn, album_id):
         FROM external_metadata
         WHERE album_id = ?
         ORDER BY CASE provider
-            WHEN 'musicbrainz' THEN 1
+            WHEN 'apple_itunes' THEN 1
             WHEN 'discogs' THEN 2
-            WHEN 'apple_itunes' THEN 3
-            WHEN 'lastfm' THEN 4
+            WHEN 'lastfm' THEN 3
+            WHEN 'musicbrainz' THEN 4
             ELSE 5
         END, provider
         """,
@@ -400,10 +400,10 @@ def get_album_bundle(conn, album_id):
         FROM album_service_status
         WHERE album_id = ?
         ORDER BY CASE provider
-            WHEN 'musicbrainz' THEN 1
+            WHEN 'apple_itunes' THEN 1
             WHEN 'discogs' THEN 2
-            WHEN 'apple_itunes' THEN 3
-            WHEN 'lastfm' THEN 4
+            WHEN 'lastfm' THEN 3
+            WHEN 'musicbrainz' THEN 4
             ELSE 5
         END, provider
         """,
@@ -904,10 +904,10 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                             WHERE album_service_status.album_id = albums.id
                               AND album_service_status.found = 1
                             ORDER BY CASE provider
-                                WHEN 'musicbrainz' THEN 1
+                                WHEN 'apple_itunes' THEN 1
                                 WHEN 'discogs' THEN 2
-                                WHEN 'apple_itunes' THEN 3
-                                WHEN 'lastfm' THEN 4
+                                WHEN 'lastfm' THEN 3
+                                WHEN 'musicbrainz' THEN 4
                                 ELSE 5
                             END, provider
                         )
@@ -1288,7 +1288,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             ],
         )
 
-    def apply_cached_apple_explicitness(self, conn, album_id):
+    def apply_cached_apple_explicitness(self, conn, album_id, replace_existing=False):
         row = conn.execute(
             """
             SELECT raw_json
@@ -1303,7 +1303,13 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             payload = json.loads(row["raw_json"])
         except json.JSONDecodeError:
             return 0
-        return apply_apple_track_explicitness(conn, album_id, apple_track_rows(payload.get("lookup") or {}), replace_if_empty=False)
+        return apply_apple_track_explicitness(
+            conn,
+            album_id,
+            apple_track_rows(payload.get("lookup") or {}),
+            replace_if_empty=replace_existing,
+            replace_existing=replace_existing,
+        )
 
     def handle_create_album(self):
         if not self.require_editor():
@@ -1331,7 +1337,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
                 if "tracks" in payload:
                     self.replace_album_tracks(conn, album_id, payload.get("tracks"))
-                    self.apply_cached_apple_explicitness(conn, album_id)
+                    self.apply_cached_apple_explicitness(conn, album_id, replace_existing=bool(service_url))
                 self.save_uploaded_cover(conn, album_id, payload.get("cover_data_url"))
                 conn.commit()
                 bundle = get_album_bundle(conn, album_id)
@@ -1379,7 +1385,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
                 if "tracks" in payload:
                     self.replace_album_tracks(conn, album_id, payload.get("tracks"))
-                    self.apply_cached_apple_explicitness(conn, album_id)
+                    self.apply_cached_apple_explicitness(conn, album_id, replace_existing=bool(service_url))
                 self.save_uploaded_cover(conn, album_id, payload.get("cover_data_url"))
                 conn.commit()
                 bundle = get_album_bundle(conn, album_id)

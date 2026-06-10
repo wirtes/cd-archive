@@ -886,10 +886,10 @@ def update_master_catalog_fields(conn: sqlite3.Connection, album_id: int) -> Non
         ).fetchall()
     }
     sources = [
-        ("musicbrainz", musicbrainz_master_fields(conn, album_id)),
-        ("discogs", discogs_master_fields(external_rows.get("discogs"))),
         ("apple_itunes", apple_master_fields(external_rows.get("apple_itunes"))),
+        ("discogs", discogs_master_fields(external_rows.get("discogs"))),
         ("lastfm", lastfm_master_fields(external_rows.get("lastfm"))),
+        ("musicbrainz", musicbrainz_master_fields(conn, album_id)),
     ]
     resolved: dict[str, str | int | bool | None] = {}
     provenance: dict[str, str] = {}
@@ -1688,7 +1688,13 @@ def track_match_keys(title: str | None) -> set[str]:
     return {key for key in keys if key}
 
 
-def apply_apple_track_explicitness(conn: sqlite3.Connection, album_id: int, apple_tracks: list[dict], replace_if_empty: bool = True) -> int:
+def apply_apple_track_explicitness(
+    conn: sqlite3.Connection,
+    album_id: int,
+    apple_tracks: list[dict],
+    replace_if_empty: bool = True,
+    replace_existing: bool = False,
+) -> int:
     existing = conn.execute(
         "SELECT id, title FROM tracks WHERE album_id = ? ORDER BY medium_position, track_position, id",
         (album_id,),
@@ -1699,7 +1705,7 @@ def apply_apple_track_explicitness(conn: sqlite3.Connection, album_id: int, appl
         if key:
             apple_by_title[key] = track
 
-    if existing:
+    if existing and not replace_existing:
         changed = 0
         for row in existing:
             apple_track = next((apple_by_title.get(key) for key in track_match_keys(row["title"]) if key in apple_by_title), None)
@@ -1710,7 +1716,9 @@ def apply_apple_track_explicitness(conn: sqlite3.Connection, album_id: int, appl
             changed += 1
         return changed
 
-    if not replace_if_empty:
+    if existing and replace_existing:
+        conn.execute("DELETE FROM tracks WHERE album_id = ?", (album_id,))
+    elif not replace_if_empty:
         return 0
 
     rows = []
@@ -1776,7 +1784,7 @@ def upsert_apple_album(conn: sqlite3.Connection, album_id: int, album: dict, loo
         url=album.get("collectionViewUrl"),
     )
     replace_provider_cover_art(conn, album_id, "apple_itunes", cover_url, str(collection_id) if collection_id else None, album)
-    apply_apple_track_explicitness(conn, album_id, apple_tracks)
+    apply_apple_track_explicitness(conn, album_id, apple_tracks, replace_existing=True)
     return album.get("artistName"), album.get("collectionName")
 
 
@@ -1794,7 +1802,7 @@ def fetch_apple_itunes(conn: sqlite3.Connection, album_id: int, artist: str, alb
             payload = json.loads(raw["raw_json"] or "{}") if raw else {}
         except json.JSONDecodeError:
             payload = {}
-        apply_apple_track_explicitness(conn, album_id, apple_track_rows(payload.get("lookup") or {}))
+        apply_apple_track_explicitness(conn, album_id, apple_track_rows(payload.get("lookup") or {}), replace_existing=True)
         return
 
     query = f"{artist} {album_name}".strip()
@@ -2065,10 +2073,10 @@ def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, servi
         FROM album_service_status
         WHERE album_id = ?
         ORDER BY CASE provider
-            WHEN 'musicbrainz' THEN 1
+            WHEN 'apple_itunes' THEN 1
             WHEN 'discogs' THEN 2
-            WHEN 'apple_itunes' THEN 3
-            WHEN 'lastfm' THEN 4
+            WHEN 'lastfm' THEN 3
+            WHEN 'musicbrainz' THEN 4
             ELSE 5
         END, provider
         """,
@@ -2111,10 +2119,10 @@ def enrich_album_from_discogs_url(
         FROM album_service_status
         WHERE album_id = ?
         ORDER BY CASE provider
-            WHEN 'musicbrainz' THEN 1
+            WHEN 'apple_itunes' THEN 1
             WHEN 'discogs' THEN 2
-            WHEN 'apple_itunes' THEN 3
-            WHEN 'lastfm' THEN 4
+            WHEN 'lastfm' THEN 3
+            WHEN 'musicbrainz' THEN 4
             ELSE 5
         END, provider
         """,
