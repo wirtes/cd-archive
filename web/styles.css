@@ -139,6 +139,39 @@ p {
   justify-items: end;
 }
 
+.userControls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  color: #dce6ee;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.sessionUser {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logoutButton {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 9px;
+  border-color: rgba(255, 255, 255, 0.34);
+  background: transparent;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.logoutButton:hover {
+  border-color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
 .addButton {
   display: inline-flex;
   align-items: center;

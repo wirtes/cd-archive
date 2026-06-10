@@ -33,6 +33,33 @@ body {
   color: #f7faf8;
 }
 
+.mobileUserControls {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: #dce6ee;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.sessionUser {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logoutButton {
+  min-height: 34px;
+  padding: 0 12px;
+  border-color: rgba(255, 255, 255, 0.42);
+  background: transparent;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .mobileHeader img {
   display: block;
   width: 110px;
@@ -65,13 +92,13 @@ main {
 
 .statusMessage {
   min-height: 0;
-  padding: 10px 12px;
-  border: 1px solid #e2b800;
+  padding: 13px 14px;
+  border: 2px solid #d6a800;
   border-radius: 6px;
-  background: #ffe94d;
-  color: #111820;
-  font-size: 18px;
-  font-weight: 800;
+  background: #ffea00;
+  color: #000000;
+  font-size: 20px;
+  font-weight: 900;
   line-height: 1.35;
 }
 
@@ -114,13 +141,13 @@ video {
 }
 
 .hint {
-  padding: 10px 12px;
-  border: 1px solid #e2b800;
+  padding: 12px 13px;
+  border: 2px solid #d6a800;
   border-radius: 6px;
-  background: #ffe94d;
-  color: #111820;
-  font-size: 17px;
-  font-weight: 800;
+  background: #ffea00;
+  color: #000000;
+  font-size: 19px;
+  font-weight: 900;
   line-height: 1.35;
 }
 
@@ -240,11 +267,15 @@ dd {
   }
 
   .mobileHeader {
-    grid-template-columns: 137px minmax(0, 1fr);
+    grid-template-columns: 137px minmax(0, 1fr) auto;
   }
 
   .mobileHeader img {
     width: 137px;
+  }
+
+  .mobileUserControls {
+    grid-column: auto;
   }
 
   main {

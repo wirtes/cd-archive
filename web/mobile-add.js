@@ -15,6 +15,8 @@ const addReleaseButton = document.querySelector("#addReleaseButton");
 const desktopTopAddButton = document.querySelector("#desktopTopAddButton");
 const desktopAddForm = document.querySelector("#desktopAddForm");
 const desktopListenerStatus = document.querySelector("#desktopListenerStatus");
+const sessionUser = document.querySelector("#sessionUser");
+const logoutButton = document.querySelector("#logoutButton");
 
 let barcodeDetector = null;
 let zxingReader = null;
@@ -144,7 +146,7 @@ async function lookupBarcode(barcode) {
     barcodeInput.value = payload.barcode || clean;
     showRelease(payload);
     await publishScan(payload);
-    setStatus("Release found. Review it, then tap Add.");
+    setStatus("Release found. Add an 1190_ID, then hit Add.");
   } catch (error) {
     currentRelease = null;
     setStatus(error.message, true);
@@ -368,6 +370,13 @@ stopScanButton.addEventListener("click", stopScanner);
 addReleaseButton.addEventListener("click", addCurrentRelease);
 desktopTopAddButton?.addEventListener("click", addCurrentRelease);
 
+async function logout() {
+  await fetch("/api/logout", { method: "POST" });
+  window.location.href = "/login.html?next=%2Fmobile-add.html";
+}
+
+logoutButton?.addEventListener("click", logout);
+
 async function initializeScannerHint() {
   const nativeFormats = await supportedNativeBarcodeFormats();
   if (!nativeFormats.length && !hasZxingScanner()) {
@@ -385,6 +394,7 @@ async function loadSession() {
   }
   const payload = await response.json();
   currentRoles = payload.roles || currentRoles;
+  if (sessionUser) sessionUser.textContent = payload.username ? `Signed in: ${payload.username}` : "";
   addReleaseButton.hidden = !canEditCatalog();
   if (desktopTopAddButton) desktopTopAddButton.hidden = !canEditCatalog();
 }

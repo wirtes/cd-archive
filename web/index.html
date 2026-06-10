@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Radio 1190 Music Archive</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=auth-header-1" />
   </head>
   <body>
     <header class="topbar">
@@ -32,6 +32,10 @@
           </div>
         </div>
         <div class="headerActions">
+          <div class="userControls">
+            <span id="sessionUser" class="sessionUser"></span>
+            <button id="logoutButton" class="logoutButton" type="button">Logout</button>
+          </div>
           <button id="addAlbumButton" class="addButton" type="button">Add</button>
           <a class="addButton mobileAddButton" href="/mobile-add.html">Mobile Add</a>
           <a class="mobileAddLink" id="adminLink" href="/admin.html" hidden>Admin</a>
@@ -72,6 +76,6 @@
       <img id="lightboxImage" alt="" />
     </div>
 
-    <script src="/app.js?v=roles-1"></script>
+    <script src="/app.js?v=auth-header-1"></script>
   </body>
 </html>

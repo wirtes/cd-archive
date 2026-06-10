@@ -9,6 +9,7 @@ const state = {
   offset: 0,
   total: 0,
   selectedId: null,
+  username: "",
   roles: { admin: false, editor: false },
 };
 
@@ -32,6 +33,8 @@ const hideNaInput = document.querySelector("#hideNaInput");
 const searchTracksInput = document.querySelector("#searchTracksInput");
 const addAlbumButton = document.querySelector("#addAlbumButton");
 const adminLink = document.querySelector("#adminLink");
+const sessionUser = document.querySelector("#sessionUser");
+const logoutButton = document.querySelector("#logoutButton");
 const statsEl = document.querySelector("#stats");
 const lightboxEl = document.querySelector("#imageLightbox");
 const lightboxImageEl = document.querySelector("#lightboxImage");
@@ -50,9 +53,16 @@ async function loadSession() {
     return;
   }
   const payload = await response.json();
+  state.username = payload.username || "";
   state.roles = payload.roles || state.roles;
+  if (sessionUser) sessionUser.textContent = state.username ? `Signed in: ${state.username}` : "";
   addAlbumButton.hidden = !canEditCatalog();
   adminLink.hidden = !state.roles.admin;
+}
+
+async function logout() {
+  await fetch("/api/logout", { method: "POST" });
+  window.location.href = "/login.html";
 }
 
 function text(value) {
@@ -1251,6 +1261,8 @@ nextPage.addEventListener("click", () => {
   state.offset += state.limit;
   loadAlbums();
 });
+
+logoutButton?.addEventListener("click", logout);
 
 async function init() {
   await loadSession();

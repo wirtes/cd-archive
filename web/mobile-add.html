@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Add Album · Radio 1190 Music Archive</title>
-    <link rel="stylesheet" href="/mobile-add.css" />
+    <link rel="stylesheet" href="/mobile-add.css?v=messages-1" />
   </head>
   <body>
     <header class="mobileHeader">
@@ -14,6 +14,10 @@
       <div>
         <h1>Add Album</h1>
         <p>Scan a UPC and add a Discogs release.</p>
+      </div>
+      <div class="mobileUserControls">
+        <span id="sessionUser" class="sessionUser"></span>
+        <button id="logoutButton" class="logoutButton" type="button">Logout</button>
       </div>
     </header>
 
@@ -136,6 +140,6 @@
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=scanner-3"></script>
+    <script src="/mobile-add.js?v=scanner-4"></script>
   </body>
 </html>
