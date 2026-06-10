@@ -51,16 +51,17 @@ function showScannerVideo() {
   videoEl.hidden = false;
   if (scannerCoverImage) {
     scannerCoverImage.hidden = true;
-    scannerCoverImage.removeAttribute("src");
-    scannerCoverImage.alt = "";
+    scannerCoverImage.style.backgroundImage = "";
+    scannerCoverImage.setAttribute("aria-label", "");
   }
 }
 
 function showScannerCover(payload) {
   if (isDesktopView() || !scannerCoverImage) return;
   const album = payload.album || {};
-  scannerCoverImage.src = payload.cover_url || "/images/1190-logo-reversed-300x180.png";
-  scannerCoverImage.alt = `${album.album_name || "Release"} cover`;
+  const coverUrl = payload.cover_url || "/images/1190-logo-reversed-300x180.png";
+  scannerCoverImage.style.backgroundImage = `url("${coverUrl.replaceAll('"', "%22")}")`;
+  scannerCoverImage.setAttribute("aria-label", `${album.album_name || "Release"} cover`);
   scannerCoverImage.hidden = false;
   videoEl.hidden = true;
 }

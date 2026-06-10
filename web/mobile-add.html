@@ -26,7 +26,7 @@
 
       <section class="scannerPanel" aria-label="UPC scanner">
         <video id="scannerVideo" playsinline muted></video>
-        <img id="scannerCoverImage" class="scannerCoverImage" alt="" hidden />
+        <div id="scannerCoverImage" class="scannerCoverImage" role="img" aria-label="" hidden></div>
         <div class="scannerActions">
           <button id="startScanButton" type="button">Scan UPC</button>
           <button id="stopScanButton" type="button" disabled>Stop</button>
@@ -140,6 +140,6 @@
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=scanner-cover-1"></script>
+    <script src="/mobile-add.js?v=scanner-cover-2"></script>
   </body>
 </html>
