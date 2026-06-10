@@ -1647,16 +1647,22 @@ def apple_release_year(value: str | None) -> str | None:
     return value[:10]
 
 
+def apple_album_title_score(result: dict, album_name: str) -> int:
+    result_album = normalize_match_text(result.get("collectionName"))
+    album_term = normalize_match_text(album_name)
+    if not result_album or not album_term:
+        return 0
+    if result_album == album_term:
+        return 100
+    if result_album in album_term or album_term in result_album:
+        return 45
+    return 0
+
+
 def apple_album_score(result: dict, artist: str, album_name: str) -> int:
     result_artist = normalize_match_text(result.get("artistName"))
-    result_album = normalize_match_text(result.get("collectionName"))
     artist_term = normalize_match_text(artist)
-    album_term = normalize_match_text(album_name)
-    score = 0
-    if result_album == album_term:
-        score += 100
-    elif album_term and (result_album in album_term or album_term in result_album):
-        score += 45
+    score = apple_album_title_score(result, album_name)
     if result_artist == artist_term:
         score += 70
     elif artist_term and (result_artist in artist_term or artist_term in result_artist):
@@ -1666,10 +1672,33 @@ def apple_album_score(result: dict, artist: str, album_name: str) -> int:
 
 def select_apple_album(results: list[dict], artist: str, album_name: str) -> dict | None:
     album_results = [item for item in results if item.get("wrapperType") == "collection" and item.get("collectionId")]
-    if not album_results:
+    title_matches = [item for item in album_results if apple_album_title_score(item, album_name) > 0]
+    if not title_matches:
         return None
-    selected = max(album_results, key=lambda item: apple_album_score(item, artist, album_name))
+    selected = max(title_matches, key=lambda item: apple_album_score(item, artist, album_name))
     return selected if apple_album_score(selected, artist, album_name) >= 60 else None
+
+
+def select_apple_album_from_song_results(results: list[dict], artist: str, album_name: str) -> dict | None:
+    candidates = {}
+    for item in results:
+        if item.get("wrapperType") != "track" or not item.get("collectionId"):
+            continue
+        collection_id = item.get("collectionId")
+        if collection_id in candidates:
+            continue
+        candidates[collection_id] = {
+            "wrapperType": "collection",
+            "collectionId": collection_id,
+            "artistName": item.get("artistName"),
+            "collectionName": item.get("collectionName"),
+            "collectionViewUrl": item.get("collectionViewUrl"),
+            "artworkUrl100": item.get("artworkUrl100"),
+            "artworkUrl60": item.get("artworkUrl60"),
+            "primaryGenreName": item.get("primaryGenreName"),
+            "releaseDate": item.get("releaseDate"),
+        }
+    return select_apple_album(list(candidates.values()), artist, album_name)
 
 
 def apple_track_rows(payload: dict) -> list[dict]:
@@ -1799,27 +1828,57 @@ def upsert_apple_album(conn: sqlite3.Connection, album_id: int, album: dict, loo
 
 def fetch_apple_itunes(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> None:
     existing = conn.execute(
-        "SELECT lookup_status FROM external_metadata WHERE album_id = ? AND provider = ?",
+        "SELECT lookup_status, external_id, title, raw_json FROM external_metadata WHERE album_id = ? AND provider = ?",
         (album_id, "apple_itunes"),
     ).fetchone()
-    if existing and existing["lookup_status"] == "matched" and not refresh_cache:
-        raw = conn.execute(
-            "SELECT raw_json FROM external_metadata WHERE album_id = ? AND provider = ?",
-            (album_id, "apple_itunes"),
-        ).fetchone()
+    existing_title_matches = bool(
+        existing
+        and apple_album_title_score({"collectionName": existing["title"]}, album_name) > 0
+    )
+    if existing and existing["lookup_status"] == "matched" and not refresh_cache and existing_title_matches:
         try:
-            payload = json.loads(raw["raw_json"] or "{}") if raw else {}
+            payload = json.loads(existing["raw_json"] or "{}")
         except json.JSONDecodeError:
             payload = {}
-        apply_apple_track_explicitness(conn, album_id, apple_track_rows(payload.get("lookup") or {}), replace_existing=True)
-        return
+        tracks = apple_track_rows(payload.get("lookup") or {})
+        if tracks:
+            apply_apple_track_explicitness(conn, album_id, tracks, replace_existing=True)
+            return
+        if existing["external_id"]:
+            fetch_apple_collection_id(conn, album_id, existing["external_id"], refresh_cache=False)
+            return
 
     query = f"{artist} {album_name}".strip()
-    params = urllib.parse.urlencode({"term": query, "media": "music", "entity": "album", "limit": "10", "country": "US"})
+    params = urllib.parse.urlencode({"term": query, "media": "music", "entity": "album", "limit": "25", "country": "US"})
     url = f"https://itunes.apple.com/search?{params}"
     payload, _, error = cached_json(conn, "apple_itunes", f"album-search:{query}", url, refresh_cache=refresh_cache)
     results = (payload or {}).get("results") or []
     selected = select_apple_album(results, artist, album_name)
+    if not selected and not error and album_name:
+        song_params = urllib.parse.urlencode(
+            {
+                "term": album_name,
+                "media": "music",
+                "entity": "song",
+                "attribute": "albumTerm",
+                "limit": "50",
+                "country": "US",
+            }
+        )
+        song_url = f"https://itunes.apple.com/search?{song_params}"
+        song_payload, _, song_error = cached_json(
+            conn,
+            "apple_itunes",
+            f"album-song-search:{album_name}",
+            song_url,
+            refresh_cache=refresh_cache,
+        )
+        selected = select_apple_album_from_song_results((song_payload or {}).get("results") or [], artist, album_name)
+        if selected and selected.get("collectionId"):
+            fetch_apple_collection_id(conn, album_id, str(selected["collectionId"]), refresh_cache=refresh_cache)
+            return
+        if song_error:
+            error = song_error
     if error or not selected:
         status = "not_found" if not error or error == "not found" else "error"
         upsert_external_metadata(

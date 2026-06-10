@@ -53,6 +53,7 @@ from scripts.build_database import (
     discogs_is_compilation,
     enrich_album_from_discogs_url,
     enrich_album_from_service_url,
+    fetch_apple_collection_id,
     first_joined,
     is_various_artist,
     load_dotenv,
@@ -1291,7 +1292,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
     def apply_cached_apple_explicitness(self, conn, album_id, replace_existing=False):
         row = conn.execute(
             """
-            SELECT raw_json
+            SELECT external_id, raw_json
             FROM external_metadata
             WHERE album_id = ? AND provider = 'apple_itunes' AND lookup_status = 'matched'
             """,
@@ -1303,10 +1304,26 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             payload = json.loads(row["raw_json"])
         except json.JSONDecodeError:
             return 0
+        tracks = apple_track_rows(payload.get("lookup") or {})
+        if not tracks and row["external_id"]:
+            fetch_apple_collection_id(conn, album_id, row["external_id"], refresh_cache=False)
+            row = conn.execute(
+                """
+                SELECT raw_json
+                FROM external_metadata
+                WHERE album_id = ? AND provider = 'apple_itunes' AND lookup_status = 'matched'
+                """,
+                (album_id,),
+            ).fetchone()
+            try:
+                payload = json.loads(row["raw_json"] or "{}") if row else {}
+            except json.JSONDecodeError:
+                payload = {}
+            tracks = apple_track_rows(payload.get("lookup") or {})
         return apply_apple_track_explicitness(
             conn,
             album_id,
-            apple_track_rows(payload.get("lookup") or {}),
+            tracks,
             replace_if_empty=replace_existing,
             replace_existing=replace_existing,
         )
