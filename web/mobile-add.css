@@ -140,17 +140,6 @@ video {
   gap: 10px;
 }
 
-.hint {
-  padding: 12px 13px;
-  border: 2px solid #d6a800;
-  border-radius: 6px;
-  background: #ffea00;
-  color: #000000;
-  font-size: 19px;
-  font-weight: 900;
-  line-height: 1.35;
-}
-
 .lookupForm {
   display: grid;
   gap: 8px;

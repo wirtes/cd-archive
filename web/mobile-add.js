@@ -1,7 +1,6 @@
 const videoEl = document.querySelector("#scannerVideo");
 const startScanButton = document.querySelector("#startScanButton");
 const stopScanButton = document.querySelector("#stopScanButton");
-const scannerHint = document.querySelector("#scannerHint");
 const lookupForm = document.querySelector("#lookupForm");
 const barcodeInput = document.querySelector("#barcodeInput");
 const mobileCatalogInput = document.querySelector("#mobileCatalogInput");
@@ -21,6 +20,7 @@ const logoutButton = document.querySelector("#logoutButton");
 let barcodeDetector = null;
 let zxingReader = null;
 let zxingControls = null;
+let zxingCameraTuned = false;
 let scanStream = null;
 let scanFrame = 0;
 let currentRelease = null;
@@ -29,6 +29,12 @@ let lastScanEventId = 0;
 let currentRoles = { admin: false, editor: false };
 
 const UPC_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e"];
+const SCANNER_VIDEO_CONSTRAINTS = {
+  facingMode: { ideal: "environment" },
+  width: { ideal: 1280 },
+  height: { ideal: 720 },
+  advanced: [{ focusMode: "continuous" }],
+};
 const isDesktopView = () => window.matchMedia("(min-width: 760px)").matches;
 const canEditCatalog = () => Boolean(currentRoles.admin || currentRoles.editor);
 const hasNativeScanner = () => "BarcodeDetector" in window;
@@ -262,6 +268,7 @@ function stopScanner() {
     zxingControls.stop();
     zxingControls = null;
   }
+  zxingCameraTuned = false;
   if (zxingReader?.reset) {
     zxingReader.reset();
   }
@@ -280,6 +287,26 @@ function handleScannedBarcode(value) {
   stopScanner();
   barcodeInput.value = clean;
   lookupBarcode(clean);
+}
+
+async function tuneCameraForCloseScan(stream) {
+  const track = stream?.getVideoTracks?.()[0];
+  if (!track?.getCapabilities || !track.applyConstraints) return;
+  const capabilities = track.getCapabilities();
+  const advanced = [];
+  if (capabilities.focusMode?.includes("continuous")) {
+    advanced.push({ focusMode: "continuous" });
+  }
+  if (typeof capabilities.zoom?.min === "number" && typeof capabilities.zoom?.max === "number") {
+    const zoom = Math.min(capabilities.zoom.max, Math.max(capabilities.zoom.min, 1.5));
+    advanced.push({ zoom });
+  }
+  if (!advanced.length) return;
+  try {
+    await track.applyConstraints({ advanced });
+  } catch {
+    // Browsers expose camera controls unevenly. Scanning still works without these hints.
+  }
 }
 
 async function scanLoop() {
@@ -306,9 +333,10 @@ async function startNativeScanner() {
   }
   barcodeDetector = barcodeDetector || new BarcodeDetector({ formats });
   scanStream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: "environment" } },
+    video: SCANNER_VIDEO_CONSTRAINTS,
     audio: false,
   });
+  await tuneCameraForCloseScan(scanStream);
   videoEl.srcObject = scanStream;
   await videoEl.play();
   startScanButton.disabled = true;
@@ -323,11 +351,20 @@ async function startZxingScanner() {
     throw new Error("Live barcode scanning is not available in this browser. Enter the UPC manually.");
   }
   zxingReader = zxingReader || new BrowserMultiFormatReader();
+  zxingCameraTuned = false;
   startScanButton.disabled = true;
   stopScanButton.disabled = false;
   setStatus("Point the camera at the UPC barcode.");
-  zxingControls = await zxingReader.decodeFromVideoDevice(null, videoEl, (result, error, controls) => {
+  zxingControls = await zxingReader.decodeFromConstraints({ video: SCANNER_VIDEO_CONSTRAINTS, audio: false }, videoEl, async (result, error, controls) => {
     if (controls && !zxingControls) zxingControls = controls;
+    if (!zxingCameraTuned && controls?.streamVideoConstraintsApply) {
+      zxingCameraTuned = true;
+      try {
+        await controls.streamVideoConstraintsApply({ advanced: [{ focusMode: "continuous" }, { zoom: 1.5 }] });
+      } catch {
+        // Optional close-scan camera tuning is best effort.
+      }
+    }
     if (!result) return;
     handleScannedBarcode(result.getText?.() || result.text || result.rawValue);
   });
@@ -377,15 +414,6 @@ async function logout() {
 
 logoutButton?.addEventListener("click", logout);
 
-async function initializeScannerHint() {
-  const nativeFormats = await supportedNativeBarcodeFormats();
-  if (!nativeFormats.length && !hasZxingScanner()) {
-    scannerHint.textContent = "Live scanning is not available in this browser. Enter the UPC manually.";
-  } else if (!nativeFormats.length && hasZxingScanner()) {
-    scannerHint.textContent = "Live UPC scanning is available through the built-in ZXing scanner.";
-  }
-}
-
 async function loadSession() {
   const response = await fetch("/api/session");
   if (response.status === 401) {
@@ -404,7 +432,6 @@ populateDesktopForm({
   format: "CD",
   case_broken: "No",
 });
-initializeScannerHint();
 loadSession().then(async () => {
   await initializeScanListener();
   setInterval(pollScanEvents, 1800);
