@@ -67,6 +67,14 @@
           <button class="primaryButton desktopTopAddButton" id="desktopTopAddButton" type="button" disabled>Add</button>
         </div>
         <form id="desktopAddForm" class="desktopAddForm">
+          <label class="wide desktopServiceLookup">
+            <span>Load from Music Service URL</span>
+            <div class="serviceLookupRow">
+              <input name="music_service_url" type="url" placeholder="Discogs release or master URL" />
+              <button id="desktopLoadServiceButton" type="button">Get Album Info</button>
+            </div>
+            <small id="desktopServiceMessage" class="desktopServiceMessage" role="status" aria-live="polite"></small>
+          </label>
           <label>
             <span>Timestamp</span>
             <input name="timestamp" type="text" />
@@ -140,6 +148,6 @@
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=desktop-align-1"></script>
+    <script src="/mobile-add.js?v=desktop-url-loader-1"></script>
   </body>
 </html>

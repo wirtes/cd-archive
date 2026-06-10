@@ -389,6 +389,27 @@ dd {
     grid-column: 1 / -1;
   }
 
+  .serviceLookupRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .serviceLookupRow button {
+    min-width: 140px;
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #ffffff;
+  }
+
+  .desktopServiceMessage {
+    min-height: 18px;
+    color: var(--accent-strong);
+    font-size: 12px;
+    font-weight: 760;
+    text-transform: none;
+  }
+
   .checkboxField {
     grid-template-columns: 1fr auto;
     align-items: end;

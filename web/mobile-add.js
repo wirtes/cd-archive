@@ -15,6 +15,8 @@ const addReleaseButton = document.querySelector("#addReleaseButton");
 const desktopTopAddButton = document.querySelector("#desktopTopAddButton");
 const desktopAddForm = document.querySelector("#desktopAddForm");
 const desktopListenerStatus = document.querySelector("#desktopListenerStatus");
+const desktopLoadServiceButton = document.querySelector("#desktopLoadServiceButton");
+const desktopServiceMessage = document.querySelector("#desktopServiceMessage");
 const sessionUser = document.querySelector("#sessionUser");
 const logoutButton = document.querySelector("#logoutButton");
 
@@ -83,6 +85,31 @@ function text(value) {
   return value === null || value === undefined || value === "" ? "N/A" : String(value);
 }
 
+function currentTimestampValue() {
+  return new Date().toISOString().slice(0, 19).replace("T", " ");
+}
+
+function defaultDesktopAlbumValues() {
+  return {
+    timestamp: currentTimestampValue(),
+    catalog_number: "",
+    artist: "",
+    album_name: "",
+    version_number: "",
+    case_broken: "No",
+    label_number_missing: "",
+    label: "",
+    format: "CD",
+    compilation: false,
+    country: "",
+    released: "",
+    genre: "",
+    notes: "",
+    other: "",
+    music_service_url: "",
+  };
+}
+
 async function supportedNativeBarcodeFormats() {
   if (!hasNativeScanner()) return [];
   if (!BarcodeDetector.getSupportedFormats) return UPC_FORMATS;
@@ -106,6 +133,12 @@ function renderDetails(payload) {
     ["UPC", payload.barcode],
   ];
   releaseDetails.innerHTML = rows.map(([label, value]) => `<dt>${label}</dt><dd>${text(value)}</dd>`).join("");
+}
+
+function firstCoverUrl(payload) {
+  const covers = payload.cover_art || [];
+  const cover = covers.find((item) => item.is_front) || covers[0];
+  return cover?.local_image_url || cover?.thumbnail_large || cover?.thumbnail_small || cover?.image_url || payload.cover_url || "";
 }
 
 function showRelease(payload) {
@@ -134,6 +167,24 @@ function populateDesktopForm(album) {
       field.value = value ?? "";
     }
   }
+}
+
+function populateDesktopFormFromPreview(payload, serviceUrl) {
+  const album = payload.album || {};
+  const external = payload.external || [];
+  const match = external.find((item) => item.provider === "discogs" && item.lookup_status === "matched") || external[0] || {};
+  populateDesktopForm({
+    ...album,
+    artist: match.artist || album.artist,
+    album_name: match.title || album.album_name,
+    music_service_url: serviceUrl,
+  });
+}
+
+function resetDesktopAddForm() {
+  if (!desktopAddForm) return;
+  populateDesktopForm(defaultDesktopAlbumValues());
+  if (desktopServiceMessage) desktopServiceMessage.textContent = "";
 }
 
 function desktopFormAlbum() {
@@ -232,6 +283,9 @@ async function addCurrentRelease() {
     releaseCard.hidden = true;
     barcodeInput.value = "";
     if (mobileCatalogInput) mobileCatalogInput.value = "";
+    resetDesktopAddForm();
+    clearReleaseState();
+    showScannerVideo();
     if (desktopListenerStatus) {
       desktopListenerStatus.textContent = "Waiting for mobile scans...";
     }
@@ -241,6 +295,52 @@ async function addCurrentRelease() {
     setStatus(error.message, true);
     addReleaseButton.disabled = false;
     if (desktopTopAddButton) desktopTopAddButton.disabled = false;
+  }
+}
+
+async function loadDesktopServiceUrl() {
+  if (!desktopAddForm) return;
+  const serviceUrl = desktopAddForm.elements.music_service_url?.value.trim();
+  if (!serviceUrl) {
+    if (desktopServiceMessage) desktopServiceMessage.textContent = "Enter a Discogs release or master URL.";
+    return;
+  }
+  if (desktopServiceMessage) desktopServiceMessage.textContent = "Looking up Discogs data...";
+  if (desktopLoadServiceButton) desktopLoadServiceButton.disabled = true;
+  try {
+    const album = desktopFormAlbum();
+    const response = await fetch("/api/music-service-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: serviceUrl,
+        artist: album.artist,
+        album_name: album.album_name,
+        format: album.format || "CD",
+        compilation: album.compilation,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to load music service data.");
+    const previewAlbum = payload.album || {};
+    const releaseUrl = serviceUrl;
+    currentRelease = {
+      ...payload,
+      album: previewAlbum,
+      cover_url: firstCoverUrl(payload),
+      release_url: releaseUrl,
+      track_count: payload.tracks?.length || 0,
+      barcode: "",
+    };
+    populateDesktopFormFromPreview(payload, serviceUrl);
+    showRelease(currentRelease);
+    if (desktopServiceMessage) desktopServiceMessage.textContent = "Loaded Discogs data. Review the fields before saving.";
+    if (desktopListenerStatus) desktopListenerStatus.textContent = "Discogs URL loaded. Review the form, then click Add.";
+    setStatus("Album info loaded. Add an 1190_ID, then hit Add.");
+  } catch (error) {
+    if (desktopServiceMessage) desktopServiceMessage.textContent = error.message;
+  } finally {
+    if (desktopLoadServiceButton) desktopLoadServiceButton.disabled = false;
   }
 }
 
@@ -447,6 +547,7 @@ startScanButton.addEventListener("click", startScanner);
 stopScanButton.addEventListener("click", stopScanner);
 addReleaseButton.addEventListener("click", addCurrentRelease);
 desktopTopAddButton?.addEventListener("click", addCurrentRelease);
+desktopLoadServiceButton?.addEventListener("click", loadDesktopServiceUrl);
 
 async function logout() {
   await fetch("/api/logout", { method: "POST" });
@@ -468,11 +569,7 @@ async function loadSession() {
   if (desktopTopAddButton) desktopTopAddButton.hidden = !canEditCatalog();
 }
 
-populateDesktopForm({
-  timestamp: new Date().toISOString().slice(0, 19).replace("T", " "),
-  format: "CD",
-  case_broken: "No",
-});
+resetDesktopAddForm();
 loadSession().then(async () => {
   await initializeScanListener();
   setInterval(pollScanEvents, 1800);
