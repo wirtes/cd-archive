@@ -4,20 +4,31 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Add Album · Radio 1190 Music Archive</title>
-    <link rel="stylesheet" href="/mobile-add.css?v=service-url-row-1" />
+    <link rel="stylesheet" href="/mobile-add.css?v=archive-header-track-editor-1" />
   </head>
   <body>
-    <header class="mobileHeader">
-      <a href="/" aria-label="Radio 1190 Music Archive">
-        <img src="/images/1190-logo-reversed-300x180.png" alt="Radio 1190" />
-      </a>
-      <div>
-        <h1>Add Album</h1>
-        <p>Scan a UPC and add a Discogs release.</p>
+    <header class="topbar pageHeader">
+      <div class="brandBlock">
+        <a class="logoLink" href="/" aria-label="Radio 1190 Music Archive home">
+          <img class="siteLogo" src="/images/1190-logo-reversed-300x180.png" alt="Radio 1190" />
+        </a>
+        <div>
+          <h1><a class="homeLink" href="/">Add Album</a></h1>
+          <p>Scan a UPC and add a Discogs release.</p>
+        </div>
       </div>
-      <div class="mobileUserControls">
+      <div class="userControls">
         <span id="sessionUser" class="sessionUser"></span>
-        <button id="logoutButton" class="logoutButton" type="button">Logout</button>
+        <div class="accountMenuWrap">
+          <button id="accountMenuButton" class="accountMenuButton" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">
+            <span class="hamburgerIcon" aria-hidden="true"><span></span><span></span><span></span></span>
+          </button>
+          <div id="accountMenu" class="accountMenu" role="menu" hidden>
+            <a href="/" role="menuitem">Archive</a>
+            <a id="adminLink" href="/admin.html" role="menuitem" hidden>Admin</a>
+            <button id="logoutButton" type="button" role="menuitem">Logout</button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -35,7 +46,7 @@
 
       <section class="desktopQrPanel" aria-label="Mobile scanner link">
         <img src="/images/mobile_qr.png" alt="QR code for mobile add page" />
-        <p>Open this page on your mobile device to scan UPC codes</p>
+        <p>Open this page on your mobile device, login as <span id="desktopQrUser" class="desktopQrUser">this user</span> to scan UPC codes and load the album info here.</p>
       </section>
 
       <form class="lookupForm" id="lookupForm">
@@ -54,6 +65,13 @@
           <h2 id="releaseTitle"></h2>
           <p id="releaseArtist"></p>
           <dl id="releaseDetails"></dl>
+          <section class="trackEditor releaseTrackEditor" aria-label="Song list">
+            <div class="trackEditorHead">
+              <h3>Song List</h3>
+              <button type="button" data-add-track-row data-track-target="release">Add Track</button>
+            </div>
+            <div class="trackRows" id="releaseTrackRows" data-track-rows></div>
+          </section>
           <button class="primaryButton releaseAddButton" id="addReleaseButton" type="button">Add Album</button>
         </div>
       </section>
@@ -61,8 +79,8 @@
       <section class="desktopAddPanel" aria-label="Desktop add form">
         <div class="desktopPanelHead">
           <div>
-            <h2>Desktop Add</h2>
-            <p id="desktopListenerStatus">Listening for scans from your logged-in mobile device.</p>
+            <h2>Add Album</h2>
+            <p id="desktopListenerStatus">Listening for mobile scans...</p>
           </div>
           <button class="primaryButton desktopTopAddButton" id="desktopTopAddButton" type="button" disabled>Add Album</button>
         </div>
@@ -143,11 +161,23 @@
             <span>Other</span>
             <textarea name="other"></textarea>
           </label>
+          <label class="wide">
+            <span>Album Cover Image</span>
+            <input name="cover" type="file" accept="image/png,image/jpeg,image/webp" />
+          </label>
+          <div class="coverPreview wide" id="desktopCoverPreview" hidden></div>
+          <section class="trackEditor desktopTrackEditor wide" aria-label="Song list">
+            <div class="trackEditorHead">
+              <h3>Song List</h3>
+              <button type="button" data-add-track-row data-track-target="desktop">Add Track</button>
+            </div>
+            <div class="trackRows" id="desktopTrackRows" data-track-rows></div>
+          </section>
         </form>
       </section>
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=desktop-url-loader-2"></script>
+    <script src="/mobile-add.js?v=archive-header-track-editor-1"></script>
   </body>
 </html>

@@ -58,7 +58,7 @@ async function loadSession() {
   const payload = await response.json();
   state.username = payload.username || "";
   state.roles = payload.roles || state.roles;
-  if (sessionUser) sessionUser.textContent = state.username ? `Signed in: ${state.username}` : "";
+  if (sessionUser) sessionUser.textContent = state.username || "";
   addAlbumButton.hidden = !canEditCatalog();
   adminLink.hidden = !state.roles.admin;
 }

@@ -1,6 +1,20 @@
 const userForm = document.querySelector("#userForm");
 const message = document.querySelector("#loginMessage");
 const userList = document.querySelector("#userList");
+const sessionUser = document.querySelector("#sessionUser");
+const accountMenuButton = document.querySelector("#accountMenuButton");
+const accountMenu = document.querySelector("#accountMenu");
+const logoutButton = document.querySelector("#logoutButton");
+
+function setAccountMenuOpen(open) {
+  if (!accountMenuButton || !accountMenu) return;
+  accountMenu.hidden = !open;
+  accountMenuButton.setAttribute("aria-expanded", String(open));
+}
+
+function toggleAccountMenu() {
+  setAccountMenuOpen(accountMenu?.hidden);
+}
 
 function roleText(user) {
   const roles = [];
@@ -10,6 +24,14 @@ function roleText(user) {
 }
 
 async function loadUsers() {
+  const sessionResponse = await fetch("/api/session");
+  if (sessionResponse.status === 401) {
+    window.location.href = "/login.html?next=%2Fadmin.html";
+    return;
+  }
+  const sessionPayload = await sessionResponse.json();
+  if (sessionUser) sessionUser.textContent = sessionPayload.username || "";
+
   const response = await fetch("/api/users");
   if (response.status === 401) {
     window.location.href = "/login.html?next=%2Fadmin.html";
@@ -50,6 +72,22 @@ userForm.addEventListener("submit", async (event) => {
   } catch (error) {
     message.textContent = error.message;
   }
+});
+
+async function logout() {
+  await fetch("/api/logout", { method: "POST" });
+  window.location.href = "/login.html?next=%2Fadmin.html";
+}
+
+accountMenuButton?.addEventListener("click", toggleAccountMenu);
+logoutButton?.addEventListener("click", logout);
+document.addEventListener("click", (event) => {
+  if (!accountMenu || accountMenu.hidden) return;
+  if (event.target.closest(".accountMenuWrap")) return;
+  setAccountMenuOpen(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setAccountMenuOpen(false);
 });
 
 loadUsers().catch((error) => {

@@ -17,7 +17,14 @@ const desktopAddForm = document.querySelector("#desktopAddForm");
 const desktopListenerStatus = document.querySelector("#desktopListenerStatus");
 const desktopLoadServiceButton = document.querySelector("#desktopLoadServiceButton");
 const desktopServiceMessage = document.querySelector("#desktopServiceMessage");
+const desktopCoverPreview = document.querySelector("#desktopCoverPreview");
+const desktopTrackRows = document.querySelector("#desktopTrackRows");
+const releaseTrackRows = document.querySelector("#releaseTrackRows");
 const sessionUser = document.querySelector("#sessionUser");
+const desktopQrUser = document.querySelector("#desktopQrUser");
+const adminLink = document.querySelector("#adminLink");
+const accountMenuButton = document.querySelector("#accountMenuButton");
+const accountMenu = document.querySelector("#accountMenu");
 const logoutButton = document.querySelector("#logoutButton");
 
 let barcodeDetector = null;
@@ -30,6 +37,7 @@ let currentRelease = null;
 let lookupInProgress = false;
 let lastScanEventId = 0;
 let currentRoles = { admin: false, editor: false };
+let desktopCoverDataUrl = "";
 
 const UPC_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e"];
 const SCANNER_VIDEO_CONSTRAINTS = {
@@ -75,6 +83,8 @@ function clearReleaseState() {
   releaseImage.alt = "";
   addReleaseButton.disabled = true;
   if (desktopTopAddButton) desktopTopAddButton.disabled = true;
+  renderTrackEditorRows(releaseTrackRows, []);
+  renderTrackEditorRows(desktopTrackRows, []);
 }
 
 function cleanBarcode(value) {
@@ -83,6 +93,19 @@ function cleanBarcode(value) {
 
 function text(value) {
   return value === null || value === undefined || value === "" ? "N/A" : String(value);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value);
 }
 
 function currentTimestampValue() {
@@ -150,6 +173,9 @@ function showRelease(payload) {
   releaseImage.alt = `${releaseTitle.textContent} cover`;
   renderDetails(payload);
   populateDesktopForm(album);
+  showDesktopCoverPreview(firstCoverUrl(payload));
+  renderTrackEditorRows(desktopTrackRows, payload.tracks || []);
+  renderTrackEditorRows(releaseTrackRows, payload.tracks || []);
   showScannerCover(payload);
   releaseCard.hidden = false;
   addReleaseButton.disabled = false;
@@ -185,6 +211,76 @@ function resetDesktopAddForm() {
   if (!desktopAddForm) return;
   populateDesktopForm(defaultDesktopAlbumValues());
   if (desktopServiceMessage) desktopServiceMessage.textContent = "";
+  desktopCoverDataUrl = "";
+  showDesktopCoverPreview("");
+  renderTrackEditorRows(desktopTrackRows, []);
+  renderTrackEditorRows(releaseTrackRows, []);
+}
+
+function renderTrackEditorRow(track = {}, index = 0) {
+  const trackNumber = track.track_number || track.track_position || String(index + 1);
+  return `
+    <div class="trackEditRow">
+      <label>
+        <span>#</span>
+        <input name="track_number" type="text" value="${escapeAttribute(trackNumber)}" />
+      </label>
+      <label>
+        <span>Title</span>
+        <input name="title" type="text" value="${escapeAttribute(track.title || "")}" />
+      </label>
+      <label class="explicitCheck">
+        <span>Explicit</span>
+        <input name="explicit" type="checkbox" ${track.explicit ? "checked" : ""} />
+      </label>
+      <button type="button" class="iconButton" data-remove-track-row aria-label="Remove track">×</button>
+    </div>
+  `;
+}
+
+function renderTrackEditorRows(rows, tracks = []) {
+  if (!rows) return;
+  rows.dataset.tracksLoaded = tracks.length ? "1" : "";
+  const source = tracks.length ? tracks : [{ track_number: "1", title: "", explicit: false }];
+  rows.innerHTML = source.map(renderTrackEditorRow).join("");
+}
+
+function addTrackEditorRow(rows, track = {}) {
+  if (!rows) return;
+  rows.dataset.tracksLoaded = "1";
+  const index = rows.querySelectorAll(".trackEditRow").length;
+  rows.insertAdjacentHTML("beforeend", renderTrackEditorRow(track, index));
+}
+
+function trackEditorValues(rows) {
+  if (!rows) return [];
+  return [...rows.querySelectorAll(".trackEditRow")]
+    .map((row, index) => {
+      const title = row.querySelector("input[name='title']")?.value.trim() || "";
+      const trackNumber = row.querySelector("input[name='track_number']")?.value.trim() || String(index + 1);
+      const explicit = Boolean(row.querySelector("input[name='explicit']")?.checked);
+      return { track_number: trackNumber, title, explicit };
+    })
+    .filter((track) => track.title);
+}
+
+function activeTrackRows() {
+  return isDesktopView() ? desktopTrackRows : releaseTrackRows;
+}
+
+function shouldSendTracks(rows, tracks) {
+  return Boolean(rows?.dataset.tracksLoaded || tracks.length);
+}
+
+function showDesktopCoverPreview(url) {
+  if (!desktopCoverPreview) return;
+  if (!url) {
+    desktopCoverPreview.hidden = true;
+    desktopCoverPreview.innerHTML = "";
+    return;
+  }
+  desktopCoverPreview.hidden = false;
+  desktopCoverPreview.innerHTML = `<img src="${escapeAttribute(url)}" alt="Album cover preview" />`;
 }
 
 function desktopFormAlbum() {
@@ -249,6 +345,8 @@ async function addCurrentRelease() {
     return;
   }
   const album = desktopFormAlbum();
+  const rows = activeTrackRows();
+  const tracks = trackEditorValues(rows);
   if (!album.catalog_number) {
     setStatus("1190_ID is required.", true);
     if (isDesktopView()) {
@@ -269,9 +367,11 @@ async function addCurrentRelease() {
     const response = await fetch("/api/albums", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+      body: JSON.stringify({
         album,
         music_service_url: currentRelease.release_url,
+        cover_data_url: desktopCoverDataUrl,
+        ...(shouldSendTracks(rows, tracks) ? { tracks } : {}),
       }),
     });
     const payload = await response.json();
@@ -287,7 +387,7 @@ async function addCurrentRelease() {
     clearReleaseState();
     showScannerVideo();
     if (desktopListenerStatus) {
-      desktopListenerStatus.textContent = "Waiting for mobile scans...";
+      desktopListenerStatus.textContent = "Listening for mobile scans...";
     }
     setStatus(`${albumName} by ${artist} has been added to the catalog`);
     barcodeInput.focus();
@@ -365,7 +465,7 @@ async function pollScanEvents() {
     }
   } catch {
     if (desktopListenerStatus) {
-      desktopListenerStatus.textContent = "Waiting for mobile scans...";
+      desktopListenerStatus.textContent = "Listening for mobile scans...";
     }
   }
 }
@@ -382,11 +482,11 @@ async function initializeScanListener() {
     lastScanEventId = payload.latest_id || 0;
     setStatus("");
     if (desktopListenerStatus) {
-      desktopListenerStatus.textContent = "Waiting for mobile scans...";
+      desktopListenerStatus.textContent = "Listening for mobile scans...";
     }
   } catch {
     if (desktopListenerStatus) {
-      desktopListenerStatus.textContent = "Waiting for mobile scans...";
+      desktopListenerStatus.textContent = "Listening for mobile scans...";
     }
   }
 }
@@ -549,6 +649,58 @@ addReleaseButton.addEventListener("click", addCurrentRelease);
 desktopTopAddButton?.addEventListener("click", addCurrentRelease);
 desktopLoadServiceButton?.addEventListener("click", loadDesktopServiceUrl);
 
+function setAccountMenuOpen(open) {
+  if (!accountMenuButton || !accountMenu) return;
+  accountMenu.hidden = !open;
+  accountMenuButton.setAttribute("aria-expanded", String(open));
+}
+
+function toggleAccountMenu() {
+  setAccountMenuOpen(accountMenu?.hidden);
+}
+
+accountMenuButton?.addEventListener("click", toggleAccountMenu);
+document.addEventListener("click", (event) => {
+  if (!accountMenu || accountMenu.hidden) return;
+  if (event.target.closest(".accountMenuWrap")) return;
+  setAccountMenuOpen(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setAccountMenuOpen(false);
+});
+
+document.addEventListener("click", (event) => {
+  const addTrackButton = event.target.closest("[data-add-track-row]");
+  if (addTrackButton) {
+    const target = addTrackButton.dataset.trackTarget === "release" ? releaseTrackRows : desktopTrackRows;
+    addTrackEditorRow(target);
+    return;
+  }
+  const removeTrackButton = event.target.closest("[data-remove-track-row]");
+  if (removeTrackButton) {
+    const rows = removeTrackButton.closest("[data-track-rows]");
+    removeTrackButton.closest(".trackEditRow")?.remove();
+    if (rows && !rows.querySelector(".trackEditRow")) addTrackEditorRow(rows);
+  }
+});
+
+desktopAddForm?.addEventListener("change", (event) => {
+  const input = event.target.closest("input[type='file'][name='cover']");
+  if (!input) return;
+  const file = input.files?.[0];
+  desktopCoverDataUrl = "";
+  if (!file) {
+    showDesktopCoverPreview(firstCoverUrl(currentRelease || {}));
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    desktopCoverDataUrl = String(reader.result || "");
+    showDesktopCoverPreview(desktopCoverDataUrl);
+  });
+  reader.readAsDataURL(file);
+});
+
 async function logout() {
   await fetch("/api/logout", { method: "POST" });
   window.location.href = "/login.html?next=%2Fmobile-add.html";
@@ -564,7 +716,9 @@ async function loadSession() {
   }
   const payload = await response.json();
   currentRoles = payload.roles || currentRoles;
-  if (sessionUser) sessionUser.textContent = payload.username ? `Signed in: ${payload.username}` : "";
+  if (sessionUser) sessionUser.textContent = payload.username || "";
+  if (desktopQrUser) desktopQrUser.textContent = payload.username || "this user";
+  if (adminLink) adminLink.hidden = !currentRoles.admin;
   addReleaseButton.hidden = !canEditCatalog();
   if (desktopTopAddButton) desktopTopAddButton.hidden = !canEditCatalog();
 }
