@@ -384,8 +384,9 @@ def get_album_bundle(conn, album_id):
         ORDER BY CASE provider
             WHEN 'musicbrainz' THEN 1
             WHEN 'discogs' THEN 2
-            WHEN 'lastfm' THEN 3
-            ELSE 4
+            WHEN 'apple_itunes' THEN 3
+            WHEN 'lastfm' THEN 4
+            ELSE 5
         END, provider
         """,
         (album_id,),
@@ -399,8 +400,9 @@ def get_album_bundle(conn, album_id):
         ORDER BY CASE provider
             WHEN 'musicbrainz' THEN 1
             WHEN 'discogs' THEN 2
-            WHEN 'lastfm' THEN 3
-            ELSE 4
+            WHEN 'apple_itunes' THEN 3
+            WHEN 'lastfm' THEN 4
+            ELSE 5
         END, provider
         """,
         (album_id,),
@@ -894,9 +896,19 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     albums.genre, albums.field_sources, albums.case_broken,
                     (
                         SELECT GROUP_CONCAT(provider, ', ')
-                        FROM album_service_status
-                        WHERE album_service_status.album_id = albums.id
-                          AND album_service_status.found = 1
+                        FROM (
+                            SELECT provider
+                            FROM album_service_status
+                            WHERE album_service_status.album_id = albums.id
+                              AND album_service_status.found = 1
+                            ORDER BY CASE provider
+                                WHEN 'musicbrainz' THEN 1
+                                WHEN 'discogs' THEN 2
+                                WHEN 'apple_itunes' THEN 3
+                                WHEN 'lastfm' THEN 4
+                                ELSE 5
+                            END, provider
+                        )
                     ) AS matched_services
                 FROM albums
                 {where_sql}
@@ -1020,7 +1032,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 },
                 row_number=1,
             )
-            result = enrich_album_from_discogs_url(conn, album_id, service_url, refresh_cache=False)
+            result = enrich_album_from_discogs_url(conn, album_id, service_url, refresh_cache=False, include_related=False)
             self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
             bundle = get_album_bundle(conn, album_id)
         except ValueError as exc:

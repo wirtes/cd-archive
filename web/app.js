@@ -109,6 +109,7 @@ function sourceLabel(value) {
   const labels = {
     musicbrainz: "MusicBrainz",
     discogs: "Discogs",
+    apple_itunes: "Apple iTunes",
     lastfm: "Last.fm",
   };
   return labels[value] || value || "";
@@ -221,7 +222,7 @@ function albumPreviewTerm(album) {
 }
 
 function appleAlbumFromServices(album, external) {
-  const providerOrder = ["musicbrainz", "discogs", "lastfm"];
+  const providerOrder = ["musicbrainz", "discogs", "apple_itunes", "lastfm"];
   for (const provider of providerOrder) {
     const match = external.find(
       (source) =>
@@ -630,7 +631,7 @@ function showAlbumForm(mode = "add", payload = null) {
           ? `<label class="formField wide" for="edit-service-url">
               <span>Match to this Album</span>
               <div class="serviceLookupRow">
-                <input id="edit-service-url" name="music_service_url" type="url" placeholder="MusicBrainz, Discogs, or Last.fm album URL" />
+                <input id="edit-service-url" name="music_service_url" type="url" placeholder="MusicBrainz, Discogs, Apple Music, or Last.fm album URL" />
                 <button type="button" data-preview-match-url>Get Album Info</button>
               </div>
             </label>`
@@ -759,7 +760,7 @@ function populateAlbumFormFromAlbum(form, album) {
 }
 
 function bestExternalMatch(external) {
-  const order = ["musicbrainz", "discogs", "lastfm"];
+  const order = ["musicbrainz", "discogs", "apple_itunes", "lastfm"];
   for (const provider of order) {
     const match = external.find((item) => item.provider === provider && item.lookup_status === "matched");
     if (match) return match;
@@ -1204,7 +1205,7 @@ async function previewMatchIntoEditForm(form) {
   const button = form.querySelector("[data-preview-match-url]");
   const serviceUrl = form.elements.music_service_url.value.trim();
   if (!serviceUrl) {
-    message.textContent = "Enter a MusicBrainz, Discogs, or Last.fm album URL.";
+    message.textContent = "Enter a MusicBrainz, Discogs, Apple Music, or Last.fm album URL.";
     return;
   }
   message.textContent = "Looking up album info...";

@@ -49,6 +49,7 @@ API_THROTTLE_SECONDS = {
     "musicbrainz": 1.1,
     "cover_art_archive": 1.1,
     "discogs": 1.1,
+    "apple_itunes": 1.1,
     "lastfm": 1.1,
 }
 LAST_API_REQUEST_AT: dict[str, float] = {}
@@ -495,6 +496,10 @@ def normalize_artist_name(value: str | None) -> str:
     return re.sub(r"\s+", " ", re.sub(r"\s*\(\d+\)\s*$", "", value or "")).strip()
 
 
+def normalize_match_text(value: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").casefold()).strip()
+
+
 def is_various_artist(value: str | None) -> bool:
     normalized = normalize_artist_name(value).casefold().replace(".", "")
     return normalized in {"v/a", "va", "various", "various artists"}
@@ -837,6 +842,27 @@ def lastfm_master_fields(row: sqlite3.Row | None) -> dict[str, str | None]:
     return {"genre": unique_join(json_list(row["genres"]), limit=6), "compilation": is_various_artist(row["artist"])}
 
 
+def apple_master_fields(row: sqlite3.Row | None) -> dict[str, str | None]:
+    if not row or row["lookup_status"] != "matched":
+        return {}
+    raw = json.loads(row["raw_json"] or "{}")
+    search_results = raw.get("search", {}).get("results") or []
+    album = next(
+        (
+            item
+            for item in search_results
+            if str(item.get("collectionId") or "") == str(row["external_id"] or "")
+        ),
+        {},
+    )
+    return {
+        "country": album.get("country"),
+        "released": apple_release_year(album.get("releaseDate")),
+        "genre": unique_join(json_list(row["genres"]), limit=6),
+        "compilation": is_various_artist(row["artist"]),
+    }
+
+
 def musicbrainz_master_fields(conn: sqlite3.Connection, album_id: int) -> dict[str, str | None]:
     row = conn.execute("SELECT * FROM musicbrainz_metadata WHERE album_id = ?", (album_id,)).fetchone()
     if not row or row["lookup_status"] != "matched":
@@ -862,6 +888,7 @@ def update_master_catalog_fields(conn: sqlite3.Connection, album_id: int) -> Non
     sources = [
         ("musicbrainz", musicbrainz_master_fields(conn, album_id)),
         ("discogs", discogs_master_fields(external_rows.get("discogs"))),
+        ("apple_itunes", apple_master_fields(external_rows.get("apple_itunes"))),
         ("lastfm", lastfm_master_fields(external_rows.get("lastfm"))),
     ]
     resolved: dict[str, str | int | bool | None] = {}
@@ -1608,6 +1635,218 @@ def upsert_lastfm_album(
     return album.get("artist"), album.get("name")
 
 
+def apple_artwork_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    return re.sub(r"/\d+x\d+bb\.", "/1200x1200bb.", value)
+
+
+def apple_release_year(value: str | None) -> str | None:
+    if not value:
+        return None
+    return value[:10]
+
+
+def apple_album_score(result: dict, artist: str, album_name: str) -> int:
+    result_artist = normalize_match_text(result.get("artistName"))
+    result_album = normalize_match_text(result.get("collectionName"))
+    artist_term = normalize_match_text(artist)
+    album_term = normalize_match_text(album_name)
+    score = 0
+    if result_album == album_term:
+        score += 100
+    elif album_term and (result_album in album_term or album_term in result_album):
+        score += 45
+    if result_artist == artist_term:
+        score += 70
+    elif artist_term and (result_artist in artist_term or artist_term in result_artist):
+        score += 25
+    return score
+
+
+def select_apple_album(results: list[dict], artist: str, album_name: str) -> dict | None:
+    album_results = [item for item in results if item.get("wrapperType") == "collection" and item.get("collectionId")]
+    if not album_results:
+        return None
+    selected = max(album_results, key=lambda item: apple_album_score(item, artist, album_name))
+    return selected if apple_album_score(selected, artist, album_name) >= 60 else None
+
+
+def apple_track_rows(payload: dict) -> list[dict]:
+    return [
+        item
+        for item in payload.get("results") or []
+        if item.get("wrapperType") == "track" and item.get("kind") == "song" and item.get("trackName")
+    ]
+
+
+def track_match_keys(title: str | None) -> set[str]:
+    value = title or ""
+    keys = {normalize_match_text(value)}
+    if " - " in value:
+        keys.add(normalize_match_text(value.split(" - ", 1)[1]))
+    return {key for key in keys if key}
+
+
+def apply_apple_track_explicitness(conn: sqlite3.Connection, album_id: int, apple_tracks: list[dict], replace_if_empty: bool = True) -> int:
+    existing = conn.execute(
+        "SELECT id, title FROM tracks WHERE album_id = ? ORDER BY medium_position, track_position, id",
+        (album_id,),
+    ).fetchall()
+    apple_by_title: dict[str, dict] = {}
+    for track in apple_tracks:
+        key = normalize_match_text(track.get("trackName"))
+        if key:
+            apple_by_title[key] = track
+
+    if existing:
+        changed = 0
+        for row in existing:
+            apple_track = next((apple_by_title.get(key) for key in track_match_keys(row["title"]) if key in apple_by_title), None)
+            if not apple_track:
+                continue
+            explicit = 1 if apple_track.get("trackExplicitness") == "explicit" else 0
+            conn.execute("UPDATE tracks SET explicit = ? WHERE id = ?", (explicit, row["id"]))
+            changed += 1
+        return changed
+
+    if not replace_if_empty:
+        return 0
+
+    rows = []
+    for index, track in enumerate(apple_tracks, start=1):
+        rows.append(
+            (
+                album_id,
+                1,
+                "",
+                "",
+                track.get("trackNumber") or index,
+                str(track.get("trackNumber") or index),
+                track.get("trackName"),
+                track.get("trackTimeMillis"),
+                1 if track.get("trackExplicitness") == "explicit" else 0,
+                f"apple_itunes:{track.get('trackId') or index}",
+            )
+        )
+    if not rows:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO tracks (
+            album_id, medium_position, medium_title, medium_format, track_position,
+            track_number, title, length_ms, explicit, recording_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    return len(rows)
+
+
+def upsert_apple_album(conn: sqlite3.Connection, album_id: int, album: dict, lookup_payload: dict, tracks_payload: dict | None) -> tuple[str | None, str | None]:
+    collection_id = album.get("collectionId")
+    apple_tracks = apple_track_rows(tracks_payload or {})
+    cover_url = apple_artwork_url(album.get("artworkUrl100") or album.get("artworkUrl60"))
+    upsert_external_metadata(
+        conn,
+        album_id,
+        {
+            "provider": "apple_itunes",
+            "lookup_status": "matched",
+            "lookup_error": None,
+            "fetched_at": utc_now(),
+            "external_id": str(collection_id) if collection_id else None,
+            "url": album.get("collectionViewUrl"),
+            "title": album.get("collectionName"),
+            "artist": album.get("artistName"),
+            "genres": json.dumps([album.get("primaryGenreName")] if album.get("primaryGenreName") else [], ensure_ascii=False),
+            "styles": None,
+            "track_count": album.get("trackCount") or len(apple_tracks),
+            "cover_url": cover_url,
+            "raw_json": json.dumps({"search": lookup_payload, "lookup": tracks_payload or {}}, ensure_ascii=False),
+        },
+    )
+    upsert_service_status(
+        conn,
+        album_id,
+        "apple_itunes",
+        "matched",
+        external_id=str(collection_id) if collection_id else None,
+        title=album.get("collectionName"),
+        url=album.get("collectionViewUrl"),
+    )
+    replace_provider_cover_art(conn, album_id, "apple_itunes", cover_url, str(collection_id) if collection_id else None, album)
+    apply_apple_track_explicitness(conn, album_id, apple_tracks)
+    return album.get("artistName"), album.get("collectionName")
+
+
+def fetch_apple_itunes(conn: sqlite3.Connection, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> None:
+    existing = conn.execute(
+        "SELECT lookup_status FROM external_metadata WHERE album_id = ? AND provider = ?",
+        (album_id, "apple_itunes"),
+    ).fetchone()
+    if existing and existing["lookup_status"] == "matched" and not refresh_cache:
+        raw = conn.execute(
+            "SELECT raw_json FROM external_metadata WHERE album_id = ? AND provider = ?",
+            (album_id, "apple_itunes"),
+        ).fetchone()
+        try:
+            payload = json.loads(raw["raw_json"] or "{}") if raw else {}
+        except json.JSONDecodeError:
+            payload = {}
+        apply_apple_track_explicitness(conn, album_id, apple_track_rows(payload.get("lookup") or {}))
+        return
+
+    query = f"{artist} {album_name}".strip()
+    params = urllib.parse.urlencode({"term": query, "media": "music", "entity": "album", "limit": "10", "country": "US"})
+    url = f"https://itunes.apple.com/search?{params}"
+    payload, _, error = cached_json(conn, "apple_itunes", f"album-search:{query}", url, refresh_cache=refresh_cache)
+    results = (payload or {}).get("results") or []
+    selected = select_apple_album(results, artist, album_name)
+    if error or not selected:
+        status = "not_found" if not error or error == "not found" else "error"
+        upsert_external_metadata(
+            conn,
+            album_id,
+            {
+                "provider": "apple_itunes",
+                "lookup_status": status,
+                "lookup_error": error,
+                "fetched_at": utc_now(),
+                "raw_json": json.dumps(payload or {}, ensure_ascii=False),
+            },
+        )
+        upsert_service_status(conn, album_id, "apple_itunes", status, lookup_error=error)
+        return
+
+    collection_id = selected.get("collectionId")
+    lookup_payload = {}
+    if collection_id:
+        lookup_params = urllib.parse.urlencode({"id": collection_id, "entity": "song", "country": "US"})
+        lookup_url = f"https://itunes.apple.com/lookup?{lookup_params}"
+        lookup_payload, _, _ = cached_json(conn, "apple_itunes", f"collection:{collection_id}", lookup_url, refresh_cache=refresh_cache)
+    upsert_apple_album(conn, album_id, selected, payload or {}, lookup_payload or {})
+
+
+def fetch_apple_collection_id(conn: sqlite3.Connection, album_id: int, collection_id: str, refresh_cache: bool) -> tuple[str | None, str | None]:
+    lookup_params = urllib.parse.urlencode({"id": collection_id, "entity": "song", "country": "US"})
+    lookup_url = f"https://itunes.apple.com/lookup?{lookup_params}"
+    lookup_payload, _, error = cached_json(conn, "apple_itunes", f"collection:{collection_id}", lookup_url, refresh_cache=refresh_cache)
+    if error or not lookup_payload:
+        raise ValueError(error or "Apple iTunes album was not found.")
+    album = next(
+        (
+            item
+            for item in lookup_payload.get("results") or []
+            if item.get("wrapperType") == "collection" and str(item.get("collectionId") or "") == str(collection_id)
+        ),
+        None,
+    )
+    if not album:
+        raise ValueError("Apple iTunes album was not found.")
+    return upsert_apple_album(conn, album_id, album, {"results": [album]}, lookup_payload)
+
+
 def fetch_external_provider(
     conn: sqlite3.Connection,
     provider: str,
@@ -1619,6 +1858,8 @@ def fetch_external_provider(
     try:
         if provider == "discogs":
             fetch_discogs(conn, album_id, artist, album_name, refresh_cache)
+        elif provider == "apple_itunes":
+            fetch_apple_itunes(conn, album_id, artist, album_name, refresh_cache)
         elif provider == "lastfm":
             fetch_lastfm(conn, album_id, artist, album_name, refresh_cache)
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
@@ -1766,7 +2007,11 @@ def parse_music_service_url(service_url: str) -> tuple[str, dict[str, str]]:
         artist = path_parts[1]
         album_name = path_parts[3] if len(path_parts) >= 4 and path_parts[2] in {"+albums", "_"} else path_parts[2]
         return "lastfm", {"artist": artist, "album_name": album_name}
-    raise ValueError("Enter a MusicBrainz release URL, Discogs release URL, or Last.fm album URL.")
+    if host in {"music.apple.com", "itunes.apple.com"}:
+        collection_id = next((part for part in reversed(path_parts) if part.isdigit()), "")
+        if collection_id:
+            return "apple_itunes", {"collection_id": collection_id}
+    raise ValueError("Enter a MusicBrainz release URL, Discogs release URL, Apple Music album URL, or Last.fm album URL.")
 
 
 def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, service_url: str, refresh_cache: bool = False) -> dict:
@@ -1783,6 +2028,7 @@ def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, servi
         anchor_artist, anchor_title = enrich_musicbrainz_release_id(conn, album_id, data["release_id"], refresh_cache)
         if anchor_artist and anchor_title:
             fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache, prefer_discogs_tracks=True)
+            fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
             fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
     elif provider == "discogs":
         if data.get("master_id"):
@@ -1791,16 +2037,28 @@ def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, servi
             anchor_artist, anchor_title = fetch_discogs_release_id(conn, album_id, data["release_id"], refresh_cache)
         if anchor_artist and anchor_title:
             enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+            replace_tracks_from_cached_discogs_match(conn, album_id)
+            fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
             fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
     elif provider == "lastfm":
         anchor_artist, anchor_title = fetch_lastfm_album_info(conn, album_id, data["artist"], data["album_name"], refresh_cache)
         if anchor_artist and anchor_title:
             enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
             fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache, prefer_discogs_tracks=True)
+            fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+    elif provider == "apple_itunes":
+        anchor_artist, anchor_title = fetch_apple_collection_id(conn, album_id, data["collection_id"], refresh_cache)
+        if anchor_artist and anchor_title:
+            enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+            fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache, prefer_discogs_tracks=True)
+            fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+            fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
 
     fetch_lastfm_artist(conn, anchor_artist or album["artist"], refresh_cache)
-    update_master_catalog_fields(conn, album_id)
     replace_tracks_from_cached_discogs_match(conn, album_id)
+    if anchor_artist and anchor_title:
+        fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+    update_master_catalog_fields(conn, album_id)
     services = conn.execute(
         """
         SELECT provider, lookup_status, found, external_id, title, url, lookup_error
@@ -1809,8 +2067,9 @@ def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, servi
         ORDER BY CASE provider
             WHEN 'musicbrainz' THEN 1
             WHEN 'discogs' THEN 2
-            WHEN 'lastfm' THEN 3
-            ELSE 4
+            WHEN 'apple_itunes' THEN 3
+            WHEN 'lastfm' THEN 4
+            ELSE 5
         END, provider
         """,
         (album_id,),
@@ -1818,7 +2077,13 @@ def enrich_album_from_service_url(conn: sqlite3.Connection, album_id: int, servi
     return {"provider": provider, "artist": anchor_artist, "album_name": anchor_title, "services": [dict(row) for row in services]}
 
 
-def enrich_album_from_discogs_url(conn: sqlite3.Connection, album_id: int, service_url: str, refresh_cache: bool = False) -> dict:
+def enrich_album_from_discogs_url(
+    conn: sqlite3.Connection,
+    album_id: int,
+    service_url: str,
+    refresh_cache: bool = False,
+    include_related: bool = True,
+) -> dict:
     load_dotenv()
     album = conn.execute("SELECT artist, album_name FROM albums WHERE id = ?", (album_id,)).fetchone()
     if not album:
@@ -1833,6 +2098,12 @@ def enrich_album_from_discogs_url(conn: sqlite3.Connection, album_id: int, servi
     else:
         anchor_artist, anchor_title = fetch_discogs_release_id(conn, album_id, data["release_id"], refresh_cache)
 
+    if include_related and anchor_artist and anchor_title:
+        enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+        replace_tracks_from_cached_discogs_match(conn, album_id)
+        fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+        fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+        fetch_lastfm_artist(conn, anchor_artist, refresh_cache)
     update_master_catalog_fields(conn, album_id)
     services = conn.execute(
         """
@@ -1842,8 +2113,9 @@ def enrich_album_from_discogs_url(conn: sqlite3.Connection, album_id: int, servi
         ORDER BY CASE provider
             WHEN 'musicbrainz' THEN 1
             WHEN 'discogs' THEN 2
-            WHEN 'lastfm' THEN 3
-            ELSE 4
+            WHEN 'apple_itunes' THEN 3
+            WHEN 'lastfm' THEN 4
+            ELSE 5
         END, provider
         """,
         (album_id,),
@@ -1883,6 +2155,7 @@ def enrich_first_albums(conn: sqlite3.Connection, limit: int, refresh_cache: boo
             upsert_musicbrainz_external_metadata(conn, album_id, metadata)
             cover_count = fetch_cover_art(conn, album_id, metadata.get("mb_release_id"), refresh_cache)
             fetch_external_provider(conn, "discogs", album_id, artist or "", album_name or "", refresh_cache)
+            fetch_external_provider(conn, "apple_itunes", album_id, artist or "", album_name or "", refresh_cache)
             fetch_external_provider(conn, "lastfm", album_id, artist or "", album_name or "", refresh_cache)
             fetch_lastfm_artist(conn, artist or "", refresh_cache)
             update_master_catalog_fields(conn, album_id)

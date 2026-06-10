@@ -1,6 +1,6 @@
 # Radio 1190 Music Archive
 
-A local SQLite-backed browser for the Radio 1190 CD catalog. The app imports `data/CD Catalog.csv`, enriches catalog rows with MusicBrainz, Discogs, and Last.fm metadata, caches API responses locally, downloads usable cover/artist images, and serves a lightweight web interface on port `8190`.
+A local SQLite-backed browser for the Radio 1190 CD catalog. The app imports `data/CD Catalog.csv`, enriches catalog rows with MusicBrainz, Discogs, Apple iTunes, and Last.fm metadata, caches API responses locally, downloads usable cover/artist images, and serves a lightweight web interface on port `8190`.
 
 ## What It Stores
 
@@ -8,7 +8,8 @@ The original spreadsheet remains the source of truth for supplied catalog rows. 
 
 1. MusicBrainz
 2. Discogs
-3. Last.fm
+3. Apple iTunes
+4. Last.fm
 
 The master album fields currently filled from those services are:
 
@@ -20,7 +21,7 @@ The master album fields currently filled from those services are:
 
 `format` is catalog-supplied only. The current catalog assumes imported spreadsheet items are CDs, and the web Add/Edit form treats `format` as the single user-facing format field. External services can be used to check whether the supplied format appears in API data, but they do not overwrite the catalog format.
 
-Every album keeps normalized provider records in `external_metadata`, one row per matched or attempted service. MusicBrainz, Discogs, and Last.fm are peers in that table. Some services also populate service-specific helper tables when they expose richer data; for example, `musicbrainz_metadata` stores detailed MusicBrainz release fields, and Discogs/MusicBrainz can both populate editable `tracks`.
+Every album keeps normalized provider records in `external_metadata`, one row per matched or attempted service. MusicBrainz, Discogs, Apple iTunes, and Last.fm are peers in that table. Some services also populate service-specific helper tables when they expose richer data; for example, `musicbrainz_metadata` stores detailed MusicBrainz release fields, Discogs/MusicBrainz can populate editable `tracks`, and Apple iTunes can populate or update track explicit-lyrics flags.
 
 `Various`, `V/A`, and `VA` are normalized to the special display value `Various Artists`. Compilation rows suppress artist profile display, and compilation tracks rendered as `Artist - Song` make the track artist clickable for an artist search.
 
@@ -60,7 +61,7 @@ ENV_PATH=/etc/radio1190-archive.env
 
 On a server, use paths outside the repository for the SQLite database and cached images. That lets you update code with `git pull` without replacing live catalog data or downloaded artwork.
 
-MusicBrainz does not require a token, but the script identifies itself with a user agent. Uncached MusicBrainz, Cover Art Archive, Discogs, and Last.fm API calls are throttled so enrichment stays polite to external services.
+MusicBrainz and Apple iTunes do not require tokens, but the script identifies MusicBrainz requests with a user agent. Uncached MusicBrainz, Cover Art Archive, Discogs, Apple iTunes, and Last.fm API calls are throttled so enrichment stays polite to external services.
 
 The web app requires login for the desktop catalog, mobile add page, and every `/api/*` call. If `APP_USERNAME` or `APP_PASSWORD` are not set, the local defaults are `admin` and `radio1190`; change them before listening on your LAN.
 
@@ -72,7 +73,7 @@ The `scripts/` directory contains the maintenance commands for importing data an
 
 ### `scripts/build_database.py`
 
-Imports `data/CD Catalog.csv`, creates or rebuilds `data/cd_catalog.sqlite`, imports the catalog rows, and optionally enriches albums from MusicBrainz, Discogs, and Last.fm.
+Imports `data/CD Catalog.csv`, creates or rebuilds `data/cd_catalog.sqlite`, imports the catalog rows, and optionally enriches albums from MusicBrainz, Discogs, Apple iTunes, and Last.fm.
 
 Import the CSV only:
 
@@ -113,6 +114,7 @@ Notes:
 - It reads `.env` automatically for `DISCOGS_TOKEN` and `LASTFM_API_KEY`.
 - MusicBrainz does not require a token.
 - Discogs enrichment is skipped when `DISCOGS_TOKEN` is not set.
+- Apple iTunes enrichment does not require an API key.
 - Last.fm album and artist enrichment is skipped when `LASTFM_API_KEY` is not set.
 - The script rebuilds the main catalog schema each time it runs. API payloads are cached in SQLite during a run and reused on later enrichment calls unless `--refresh-cache` is supplied.
 - Uncached provider requests are throttled per service. Cached responses return immediately.
@@ -307,15 +309,16 @@ Open an album and click `Edit` to manually match the catalog row to a service UR
 - MusicBrainz release URL, for example `https://musicbrainz.org/release/<release-id>`
 - Discogs release URL, for example `https://www.discogs.com/release/<release-id>-...`
 - Discogs master URL, for example `https://www.discogs.com/master/<master-id>-...`
+- Apple Music album URL, for example `https://music.apple.com/us/album/<album>/<collection-id>`
 - Last.fm album URL, for example `https://www.last.fm/music/<artist>/<album>`
 
-Click `Get Album Info` to preview metadata and album art in the Edit form without saving anything to the catalog database. When the form is saved, the supplied URL becomes the anchor match for that album. Discogs master URLs are resolved through the master record's `main_release`. The app then uses the artist/title from that service to look up the same album in the other two services, stores the results in SQLite, and refreshes the sidebar.
+Click `Get Album Info` to preview metadata and album art in the Edit form without saving anything to the catalog database. When the form is saved, the supplied URL becomes the anchor match for that album. Discogs master URLs are resolved through the master record's `main_release`. The app then uses the artist/title from that service to look up the same album in the other services, stores the results in SQLite, and refreshes the sidebar.
 
-Manual matches prefer Discogs tracklists when a Discogs release or master record is found. The app reapplies the cached Discogs detail payload after the other service lookups finish so a later MusicBrainz lookup does not erase the Discogs tracklist.
+Manual matches prefer Discogs tracklists when a Discogs release or master record is found. The app reapplies the cached Discogs detail payload after the other service lookups finish so a later MusicBrainz lookup does not erase the Discogs tracklist, then applies Apple iTunes explicit-lyrics flags to matching tracks.
 
 ## Add And Edit Albums
 
-Use the header `Add` button to add a new album manually. The Add form can load album data from a Discogs release or master URL only. This keeps new user-created records anchored to Discogs and avoids broad multi-service searching during entry. Existing albums can use the Edit form's `Match to this Album` field with MusicBrainz, Discogs, or Last.fm URLs.
+Use the header `Add` button to add a new album manually. The Add form can load album data from a Discogs release or master URL only. This keeps new user-created records anchored to Discogs and avoids broad multi-service searching during entry. Existing albums can use the Edit form's `Match to this Album` field with MusicBrainz, Discogs, Apple Music, or Last.fm URLs.
 
 Album detail views include `Edit` and `Delete` buttons. Edit updates the catalog fields stored on `albums`; Delete removes the album and its dependent cached metadata through SQLite foreign-key cascades.
 
@@ -344,11 +347,11 @@ The Add/Edit form includes:
 - Compilation track artists are clickable when a track is displayed as `Artist - Song`.
 - Album covers and artist images open in a lightbox.
 - Artist images and Last.fm bios appear at the bottom of the sidebar when available; long bios are truncated with a full-bio link.
-- Apple/iTunes preview code is present but currently disabled.
+- Apple iTunes metadata is cached server-side. The older client-side preview playback code is still present but currently disabled.
 
 ## Database ERD
 
-`external_metadata` is the normalized music-service table. MusicBrainz, Discogs, and Last.fm are all represented there as peer providers. `musicbrainz_metadata` is shown separately only because the app still keeps a MusicBrainz-specific release detail cache for richer fields from earlier builds; it is not the master service model.
+`external_metadata` is the normalized music-service table. MusicBrainz, Discogs, Apple iTunes, and Last.fm are all represented there as peer providers. `musicbrainz_metadata` is shown separately only because the app still keeps a MusicBrainz-specific release detail cache for richer fields from earlier builds; it is not the master service model.
 
 ```mermaid
 erDiagram
@@ -519,6 +522,7 @@ flowchart LR
 
     MusicBrainz["MusicBrainz API"] --> Builder
     Discogs["Discogs API"] --> Builder
+    Apple["Apple iTunes Search API"] --> Builder
     LastFM["Last.fm API"] --> Builder
     CoverArchive["Cover Art Archive"] --> Builder
 
@@ -545,22 +549,22 @@ flowchart LR
 | `/api/albums/<id>` | `PUT` | Update an album from Edit form fields and optional cover upload. |
 | `/api/albums/<id>` | `DELETE` | Delete an album and dependent cached rows. |
 | `/api/music-service-preview` | `POST` | Preview Discogs release/master metadata for the Add form without creating a catalog row. |
-| `/api/music-service-match-preview` | `POST` | Preview MusicBrainz, Discogs, or Last.fm metadata and album art for the Edit form without updating the catalog database. |
+| `/api/music-service-match-preview` | `POST` | Preview MusicBrainz, Discogs, Apple Music/iTunes, or Last.fm metadata and album art for the Edit form without updating the catalog database. |
 | `/api/discogs-barcode-preview` | `POST` | Preview a Discogs release from a UPC barcode for the mobile add page. |
 | `/api/scan-events` | `GET`/`POST` | Relay same-user mobile barcode scans to a desktop add page. |
 | `/api/login` | `POST` | Create an authenticated session. |
 | `/api/logout` | `POST` | End the current authenticated session. |
 | `/api/users` | `GET`/`POST` | Admin-only user listing and creation. |
-| `/api/albums/<id>/music-service-url` | `POST` | Submit a MusicBrainz, Discogs, or Last.fm album URL for an album. |
+| `/api/albums/<id>/music-service-url` | `POST` | Submit a MusicBrainz, Discogs, Apple Music/iTunes, or Last.fm album URL for an album. |
 | `/api/stats` | `GET` | Return high-level catalog stats. |
-| `/api/tags` | `GET` | Return tag-cloud data from cached MusicBrainz, Discogs, and Last.fm genre/tag/style records. |
+| `/api/tags` | `GET` | Return tag-cloud data from cached MusicBrainz, Discogs, Apple iTunes, and Last.fm genre/tag/style records. |
 
 ## Notes
 
 - `api_cache` stores raw JSON responses keyed by provider and request, so routine rebuilds avoid unnecessary API calls.
-- `external_metadata` stores normalized provider records for MusicBrainz, Discogs, and Last.fm.
-- `musicbrainz_metadata` is a service-specific detail/cache table for MusicBrainz release fields. It does not make MusicBrainz the master service model; MusicBrainz also has a normalized row in `external_metadata` like Discogs and Last.fm.
-- `tracks` can be populated from MusicBrainz or Discogs, edited in the Add/Edit form, and marked with `explicit` for explicit lyrics display. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.
+- `external_metadata` stores normalized provider records for MusicBrainz, Discogs, Apple iTunes, and Last.fm.
+- `musicbrainz_metadata` is a service-specific detail/cache table for MusicBrainz release fields. It does not make MusicBrainz the master service model; MusicBrainz also has a normalized row in `external_metadata` like Discogs, Apple iTunes, and Last.fm.
+- `tracks` can be populated from MusicBrainz, Discogs, or Apple iTunes, edited in the Add/Edit form, and marked with `explicit` for explicit lyrics display. Apple iTunes is the source used to update explicit-lyrics flags when a matching Apple album is found. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.
 - `album_service_status` records whether each service was found, not found, errored, or not configured.
 - Album art and artist images are stored as local files and referenced by local web paths.
 - The app requires authenticated sessions. Admin users can create users and assign admin/editor roles; users without admin or editor roles can browse but cannot add, edit, or delete catalog rows.
