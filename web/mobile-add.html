@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Add Album · Radio 1190 Music Archive</title>
-    <link rel="stylesheet" href="/mobile-add.css?v=status-row-1" />
+    <link rel="stylesheet" href="/mobile-add.css?v=service-url-row-1" />
   </head>
   <body>
     <header class="mobileHeader">
@@ -64,13 +64,13 @@
             <h2>Desktop Add</h2>
             <p id="desktopListenerStatus">Listening for scans from your logged-in mobile device.</p>
           </div>
-          <button class="primaryButton desktopTopAddButton" id="desktopTopAddButton" type="button" disabled>Add</button>
+          <button class="primaryButton desktopTopAddButton" id="desktopTopAddButton" type="button" disabled>Add Album</button>
         </div>
         <form id="desktopAddForm" class="desktopAddForm">
           <label class="wide desktopServiceLookup">
             <span>Load from Music Service URL</span>
             <div class="serviceLookupRow">
-              <input name="music_service_url" type="url" placeholder="Discogs release or master URL" />
+              <input name="music_service_url" type="url" />
               <button id="desktopLoadServiceButton" type="button">Get Album Info</button>
             </div>
             <small id="desktopServiceMessage" class="desktopServiceMessage" role="status" aria-live="polite"></small>
@@ -148,6 +148,6 @@
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=desktop-url-loader-1"></script>
+    <script src="/mobile-add.js?v=desktop-url-loader-2"></script>
   </body>
 </html>
