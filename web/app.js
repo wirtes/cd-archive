@@ -35,6 +35,8 @@ const searchTracksInput = document.querySelector("#searchTracksInput");
 const addAlbumButton = document.querySelector("#addAlbumButton");
 const adminLink = document.querySelector("#adminLink");
 const sessionUser = document.querySelector("#sessionUser");
+const accountMenuButton = document.querySelector("#accountMenuButton");
+const accountMenu = document.querySelector("#accountMenu");
 const logoutButton = document.querySelector("#logoutButton");
 const statsEl = document.querySelector("#stats");
 const lightboxEl = document.querySelector("#imageLightbox");
@@ -64,6 +66,16 @@ async function loadSession() {
 async function logout() {
   await fetch("/api/logout", { method: "POST" });
   window.location.href = "/login.html";
+}
+
+function setAccountMenuOpen(open) {
+  if (!accountMenu || !accountMenuButton) return;
+  accountMenu.hidden = !open;
+  accountMenuButton.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function toggleAccountMenu() {
+  setAccountMenuOpen(Boolean(accountMenu?.hidden));
 }
 
 function text(value) {
@@ -1336,6 +1348,13 @@ lightboxEl.addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !lightboxEl.hidden) closeLightbox();
+  if (event.key === "Escape" && accountMenu && !accountMenu.hidden) setAccountMenuOpen(false);
+});
+
+document.addEventListener("click", (event) => {
+  if (!accountMenu || !accountMenuButton || accountMenu.hidden) return;
+  if (event.target.closest("#accountMenu") || event.target.closest("#accountMenuButton")) return;
+  setAccountMenuOpen(false);
 });
 
 function searchByArtist(artist) {
@@ -1368,6 +1387,7 @@ nextPage.addEventListener("click", () => {
   loadAlbums({ scrollToTop: true });
 });
 
+accountMenuButton?.addEventListener("click", toggleAccountMenu);
 logoutButton?.addEventListener("click", logout);
 
 async function init() {

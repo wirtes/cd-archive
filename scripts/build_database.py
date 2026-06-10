@@ -1680,6 +1680,13 @@ def apple_track_rows(payload: dict) -> list[dict]:
     ]
 
 
+def apple_track_is_explicit(track: dict) -> bool:
+    return (
+        str(track.get("trackExplicitness") or "").casefold() == "explicit"
+        or str(track.get("contentAdvisoryRating") or "").casefold() == "explicit"
+    )
+
+
 def track_match_keys(title: str | None) -> set[str]:
     value = title or ""
     keys = {normalize_match_text(value)}
@@ -1704,6 +1711,8 @@ def apply_apple_track_explicitness(
         key = normalize_match_text(track.get("trackName"))
         if key:
             apple_by_title[key] = track
+    if not apple_by_title:
+        return 0
 
     if existing and not replace_existing:
         changed = 0
@@ -1711,7 +1720,7 @@ def apply_apple_track_explicitness(
             apple_track = next((apple_by_title.get(key) for key in track_match_keys(row["title"]) if key in apple_by_title), None)
             if not apple_track:
                 continue
-            explicit = 1 if apple_track.get("trackExplicitness") == "explicit" else 0
+            explicit = 1 if apple_track_is_explicit(apple_track) else 0
             conn.execute("UPDATE tracks SET explicit = ? WHERE id = ?", (explicit, row["id"]))
             changed += 1
         return changed
@@ -1733,7 +1742,7 @@ def apply_apple_track_explicitness(
                 str(track.get("trackNumber") or index),
                 track.get("trackName"),
                 track.get("trackTimeMillis"),
-                1 if track.get("trackExplicitness") == "explicit" else 0,
+                1 if apple_track_is_explicit(track) else 0,
                 f"apple_itunes:{track.get('trackId') or index}",
             )
         )

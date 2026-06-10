@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Radio 1190 Music Archive</title>
-    <link rel="stylesheet" href="/styles.css?v=auth-header-1" />
+    <link rel="stylesheet" href="/styles.css?v=account-menu-1" />
   </head>
   <body>
     <header class="topbar">
@@ -34,11 +34,18 @@
         <div class="headerActions">
           <div class="userControls">
             <span id="sessionUser" class="sessionUser"></span>
-            <button id="logoutButton" class="logoutButton" type="button">Logout</button>
+            <div class="accountMenuWrap">
+              <button id="accountMenuButton" class="accountMenuButton" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">
+                <span class="hamburgerIcon" aria-hidden="true"><span></span><span></span><span></span></span>
+              </button>
+              <div id="accountMenu" class="accountMenu" role="menu" hidden>
+                <a id="adminLink" href="/admin.html" role="menuitem" hidden>Admin</a>
+                <button id="logoutButton" type="button" role="menuitem">Logout</button>
+              </div>
+            </div>
           </div>
           <button id="addAlbumButton" class="addButton" type="button">Add</button>
           <a class="addButton mobileAddButton" href="/mobile-add.html">Mobile Add</a>
-          <a class="mobileAddLink" id="adminLink" href="/admin.html" hidden>Admin</a>
         </div>
       </form>
     </header>
@@ -76,6 +83,6 @@
       <img id="lightboxImage" alt="" />
     </div>
 
-    <script src="/app.js?v=apple-priority-1"></script>
+    <script src="/app.js?v=account-menu-1"></script>
   </body>
 </html>
