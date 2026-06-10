@@ -2,7 +2,6 @@ const videoEl = document.querySelector("#scannerVideo");
 const scannerCoverImage = document.querySelector("#scannerCoverImage");
 const startScanButton = document.querySelector("#startScanButton");
 const stopScanButton = document.querySelector("#stopScanButton");
-const clearButton = document.querySelector("#clearButton");
 const lookupForm = document.querySelector("#lookupForm");
 const barcodeInput = document.querySelector("#barcodeInput");
 const mobileCatalogInput = document.querySelector("#mobileCatalogInput");
@@ -446,6 +445,48 @@ async function loadDesktopServiceUrl() {
   }
 }
 
+async function lazyLoadDesktopScanTracks(release) {
+  if (!isDesktopView() || !release?.release_url) return;
+  if (release.tracks?.length) {
+    renderTrackEditorRows(desktopTrackRows, release.tracks);
+  }
+  if (desktopListenerStatus) {
+    desktopListenerStatus.textContent = "Loading track list...";
+  }
+  try {
+    const response = await fetch("/api/music-service-match-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: release.release_url,
+        album: {
+          ...(release.album || {}),
+          ...desktopFormAlbum(),
+        },
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to load track list.");
+    const tracks = payload.tracks || [];
+    currentRelease = {
+      ...(currentRelease || release),
+      tracks,
+      track_count: tracks.length,
+    };
+    renderDetails(currentRelease);
+    renderTrackEditorRows(desktopTrackRows, tracks);
+    if (desktopListenerStatus) {
+      desktopListenerStatus.textContent = tracks.length
+        ? "Track list loaded. Review the form, then click Add."
+        : "No track list found. Review the form, then click Add.";
+    }
+  } catch (error) {
+    if (desktopListenerStatus) {
+      desktopListenerStatus.textContent = `${error.message} Review the form, then click Add.`;
+    }
+  }
+}
+
 async function pollScanEvents() {
   if (!isDesktopView()) return;
   try {
@@ -463,6 +504,7 @@ async function pollScanEvents() {
         if (desktopListenerStatus) {
           desktopListenerStatus.textContent = "Latest scan loaded. Review the form, then click Add.";
         }
+        lazyLoadDesktopScanTracks(event.release);
       }
     }
   } catch {
@@ -517,10 +559,14 @@ function stopScanner() {
 function resetForNewScan() {
   stopScanner();
   clearReleaseState();
+  resetDesktopAddForm();
   showScannerVideo();
   barcodeInput.value = "";
   if (mobileCatalogInput) mobileCatalogInput.value = "";
   setStatus("");
+  if (desktopListenerStatus) {
+    desktopListenerStatus.textContent = "Listening for mobile scans...";
+  }
 }
 
 function handleScannedBarcode(value) {
@@ -647,7 +693,6 @@ lookupForm.addEventListener("submit", (event) => {
 
 startScanButton.addEventListener("click", startScanner);
 stopScanButton.addEventListener("click", stopScanner);
-clearButton?.addEventListener("click", resetForNewScan);
 desktopClearButton?.addEventListener("click", resetForNewScan);
 addReleaseButton.addEventListener("click", addCurrentRelease);
 desktopTopAddButton?.addEventListener("click", addCurrentRelease);
