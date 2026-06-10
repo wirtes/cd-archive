@@ -518,6 +518,17 @@ tbody tr.selected:hover {
   overflow-wrap: anywhere;
 }
 
+.recordingIds {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .detail a {
   color: var(--accent-strong);
   font-weight: 650;

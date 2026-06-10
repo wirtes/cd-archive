@@ -45,6 +45,8 @@ COVER_DIR = env_path("COVER_DIR", STATIC_DIR / "covers")
 ARTIST_IMAGE_DIR = env_path("ARTIST_IMAGE_DIR", STATIC_DIR / "artist-images")
 sys.path.insert(0, str(ROOT))
 from scripts.build_database import (
+    apple_track_rows,
+    apply_apple_track_explicitness,
     cached_json,
     create_schema,
     discogs_cover_url,
@@ -1286,6 +1288,23 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             ],
         )
 
+    def apply_cached_apple_explicitness(self, conn, album_id):
+        row = conn.execute(
+            """
+            SELECT raw_json
+            FROM external_metadata
+            WHERE album_id = ? AND provider = 'apple_itunes' AND lookup_status = 'matched'
+            """,
+            (album_id,),
+        ).fetchone()
+        if not row or not row["raw_json"]:
+            return 0
+        try:
+            payload = json.loads(row["raw_json"])
+        except json.JSONDecodeError:
+            return 0
+        return apply_apple_track_explicitness(conn, album_id, apple_track_rows(payload.get("lookup") or {}), replace_if_empty=False)
+
     def handle_create_album(self):
         if not self.require_editor():
             return
@@ -1312,6 +1331,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
                 if "tracks" in payload:
                     self.replace_album_tracks(conn, album_id, payload.get("tracks"))
+                    self.apply_cached_apple_explicitness(conn, album_id)
                 self.save_uploaded_cover(conn, album_id, payload.get("cover_data_url"))
                 conn.commit()
                 bundle = get_album_bundle(conn, album_id)
@@ -1359,6 +1379,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
                 if "tracks" in payload:
                     self.replace_album_tracks(conn, album_id, payload.get("tracks"))
+                    self.apply_cached_apple_explicitness(conn, album_id)
                 self.save_uploaded_cover(conn, album_id, payload.get("cover_data_url"))
                 conn.commit()
                 bundle = get_album_bundle(conn, album_id)

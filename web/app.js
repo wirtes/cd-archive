@@ -109,7 +109,7 @@ function sourceLabel(value) {
   const labels = {
     musicbrainz: "MusicBrainz",
     discogs: "Discogs",
-    apple_itunes: "Apple iTunes",
+    apple_itunes: "Apple",
     lastfm: "Last.fm",
   };
   return labels[value] || value || "";
@@ -436,6 +436,7 @@ function renderDetail(payload) {
       <dt>RYM</dt><dd>${escapeHtml(album.rateyourmusic)}</dd>
       <dt>Notes</dt><dd>${escapeHtml(album.notes)}</dd>
       <dt>Other</dt><dd>${escapeHtml(album.other)}</dd>
+      <dt>recording_id</dt><dd>${renderRecordingIds(tracks)}</dd>
     </dl>
 
     ${providerBlocks}
@@ -448,6 +449,12 @@ function renderDetail(payload) {
   if (MUSIC_PREVIEWS_ENABLED) {
     updateTrackPreviewAvailability(album, appleAlbum, tracks);
   }
+}
+
+function renderRecordingIds(tracks) {
+  const ids = [...new Set(tracks.map((track) => track.recording_id).filter(Boolean))];
+  if (!ids.length) return "—";
+  return `<ul class="recordingIds">${ids.map((id) => `<li>${escapeHtml(id)}</li>`).join("")}</ul>`;
 }
 
 function renderServiceBadges(services) {
