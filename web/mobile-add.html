@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Add Album · Radio 1190 Music Archive</title>
-    <link rel="stylesheet" href="/mobile-add.css?v=scanner-ui-1" />
+    <link rel="stylesheet" href="/mobile-add.css?v=desktop-add-1" />
   </head>
   <body>
     <header class="mobileHeader">
@@ -45,7 +45,7 @@
           <button type="submit">Lookup</button>
         </div>
         <label for="mobileCatalogInput">1190_ID</label>
-        <input id="mobileCatalogInput" name="catalog_number" type="text" />
+        <input id="mobileCatalogInput" name="catalog_number" type="number" inputmode="numeric" pattern="[0-9]*" />
       </form>
 
       <section class="releaseCard" id="releaseCard" hidden>
@@ -54,7 +54,7 @@
           <h2 id="releaseTitle"></h2>
           <p id="releaseArtist"></p>
           <dl id="releaseDetails"></dl>
-          <button class="primaryButton" id="addReleaseButton" type="button">Add</button>
+          <button class="primaryButton releaseAddButton" id="addReleaseButton" type="button">Add</button>
         </div>
       </section>
 
@@ -73,7 +73,7 @@
           </label>
           <label>
             <span>1190_ID</span>
-            <input name="catalog_number" type="text" required />
+            <input name="catalog_number" type="number" inputmode="numeric" pattern="[0-9]*" required />
           </label>
           <label>
             <span>Artist</span>
@@ -140,6 +140,6 @@
     </main>
 
     <script src="/vendor/zxing-browser.min.js?v=0.1.5"></script>
-    <script src="/mobile-add.js?v=scanner-cover-2"></script>
+    <script src="/mobile-add.js?v=desktop-align-1"></script>
   </body>
 </html>

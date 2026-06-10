@@ -546,7 +546,7 @@ function renderTracks(album, tracks) {
 
 const addAlbumFields = [
   { name: "timestamp", label: "Timestamp", type: "text", value: currentTimestampValue },
-  { name: "catalog_number", label: "1190_ID", type: "text", required: true },
+  { name: "catalog_number", label: "1190_ID", type: "number", inputMode: "numeric", pattern: "[0-9]*", required: true },
   { name: "artist", label: "Artist", type: "text" },
   { name: "album_name", label: "Album Name", type: "text" },
   { name: "version_number", label: "Version Number", type: "text" },
@@ -593,10 +593,17 @@ function renderAddField(field) {
       </label>
     `;
   }
+  const inputAttrs = [
+    field.required ? "required" : "",
+    field.inputMode ? `inputmode="${escapeAttribute(field.inputMode)}"` : "",
+    field.pattern ? `pattern="${escapeAttribute(field.pattern)}"` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return `
     <label class="formField" for="${id}">
       <span>${escapeHtml(field.label)}</span>
-      <input id="${id}" name="${field.name}" type="${escapeAttribute(field.type)}" value="${escapeAttribute(fieldValue)}" ${field.required ? "required" : ""} />
+      <input id="${id}" name="${field.name}" type="${escapeAttribute(field.type)}" value="${escapeAttribute(fieldValue)}" ${inputAttrs} />
     </label>
   `;
 }

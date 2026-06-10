@@ -329,15 +329,15 @@ dd {
     display: block !important;
   }
 
-  .releaseMeta #addReleaseButton {
-    display: none;
+  .releaseAddButton {
+    display: none !important;
   }
 
   .desktopAddPanel {
     display: grid;
     gap: 14px;
     grid-column: 2;
-    grid-row: 2 / span 4;
+    grid-row: 1 / span 4;
     padding: 16px;
     border: 1px solid var(--line);
     border-radius: 6px;
