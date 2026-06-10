@@ -284,6 +284,16 @@ function showDesktopCoverPreview(url) {
   desktopCoverPreview.innerHTML = `<img src="${escapeAttribute(url)}" alt="Album cover preview" />`;
 }
 
+function setFieldInvalid(control, invalid = true) {
+  if (!control) return;
+  control.classList.toggle("isInvalid", invalid);
+  control.closest("label")?.classList.toggle("isInvalid", invalid);
+}
+
+function clearInvalidState() {
+  document.querySelectorAll(".isInvalid").forEach((element) => element.classList.remove("isInvalid"));
+}
+
 function desktopFormAlbum() {
   if (!desktopAddForm || !isDesktopView()) {
     return { ...(currentRelease?.album || {}), catalog_number: mobileCatalogInput.value.trim() };
@@ -348,11 +358,14 @@ async function addCurrentRelease() {
   const album = desktopFormAlbum();
   const rows = activeTrackRows();
   const tracks = trackEditorValues(rows);
+  clearInvalidState();
   if (!album.catalog_number) {
     setStatus("1190_ID is required.", true);
     if (isDesktopView()) {
+      setFieldInvalid(desktopAddForm?.elements.catalog_number);
       desktopAddForm?.elements.catalog_number?.focus();
     } else {
+      setFieldInvalid(mobileCatalogInput);
       mobileCatalogInput.focus();
     }
     return;
@@ -402,7 +415,9 @@ async function addCurrentRelease() {
 async function loadDesktopServiceUrl() {
   if (!desktopAddForm) return;
   const serviceUrl = desktopAddForm.elements.music_service_url?.value.trim();
+  setFieldInvalid(desktopAddForm.elements.music_service_url, false);
   if (!serviceUrl) {
+    setFieldInvalid(desktopAddForm.elements.music_service_url);
     if (desktopServiceMessage) desktopServiceMessage.textContent = "Enter a Discogs release or master URL.";
     return;
   }
@@ -519,7 +534,7 @@ async function initializeScanListener() {
   try {
     const response = await fetch("/api/scan-events?latest=1");
     if (response.status === 401) {
-      window.location.href = "/login.html?next=%2Fmobile-add.html";
+      window.location.href = "/login.html?next=%2Fadd.html";
       return;
     }
     const payload = await response.json();
@@ -563,6 +578,7 @@ function resetForNewScan() {
   showScannerVideo();
   barcodeInput.value = "";
   if (mobileCatalogInput) mobileCatalogInput.value = "";
+  clearInvalidState();
   setStatus("");
   if (desktopListenerStatus) {
     desktopListenerStatus.textContent = "Listening for mobile scans...";
@@ -752,7 +768,7 @@ desktopAddForm?.addEventListener("change", (event) => {
 
 async function logout() {
   await fetch("/api/logout", { method: "POST" });
-  window.location.href = "/login.html?next=%2Fmobile-add.html";
+  window.location.href = "/login.html?next=%2Fadd.html";
 }
 
 logoutButton?.addEventListener("click", logout);
@@ -760,7 +776,7 @@ logoutButton?.addEventListener("click", logout);
 async function loadSession() {
   const response = await fetch("/api/session");
   if (response.status === 401) {
-    window.location.href = "/login.html?next=%2Fmobile-add.html";
+    window.location.href = "/login.html?next=%2Fadd.html";
     return;
   }
   const payload = await response.json();

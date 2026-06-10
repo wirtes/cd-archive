@@ -257,6 +257,10 @@ label {
   text-transform: uppercase;
 }
 
+label.isInvalid {
+  color: var(--accent-strong);
+}
+
 input,
 button,
 select,
@@ -273,6 +277,13 @@ textarea {
   min-width: 0;
   padding: 0 12px;
   font-size: 18px;
+}
+
+input.isInvalid,
+select.isInvalid,
+textarea.isInvalid {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 2px rgba(200, 67, 67, 0.16);
 }
 
 textarea {

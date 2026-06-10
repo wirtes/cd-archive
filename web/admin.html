@@ -6,7 +6,7 @@
     <title>Admin · Radio 1190 Catalog</title>
     <link rel="icon" href="/images/favicon.ico" />
     <link rel="stylesheet" href="/login.css" />
-    <link rel="stylesheet" href="/admin.css?v=user-edit-1" />
+    <link rel="stylesheet" href="/admin.css?v=column-settings-1" />
   </head>
   <body class="adminPage">
     <header class="topbar pageHeader">
@@ -27,7 +27,7 @@
           </button>
           <div id="accountMenu" class="accountMenu" role="menu" hidden>
             <a href="/" role="menuitem">Catalog</a>
-            <a href="/mobile-add.html" role="menuitem">Mobile Add</a>
+            <a href="/add.html" role="menuitem">Add</a>
             <button id="logoutButton" type="button" role="menuitem">Logout</button>
           </div>
         </div>
@@ -70,9 +70,16 @@
         <p id="loginMessage" role="status" aria-live="polite"></p>
       </form>
         <section class="userPanel" id="userList" aria-live="polite"></section>
+        <form class="settingsPanel" id="columnSettingsForm">
+          <h2>Catalog Columns</h2>
+          <p>Choose which columns appear in the main catalog list for all users.</p>
+          <div class="columnOptions" id="columnOptions"></div>
+          <button type="submit">Save Columns</button>
+          <p id="settingsMessage" role="status" aria-live="polite"></p>
+        </form>
       </section>
       <a class="backLink" href="/">Back to catalog</a>
     </main>
-    <script src="/admin.js?v=user-edit-1"></script>
+    <script src="/admin.js?v=column-settings-1"></script>
   </body>
 </html>

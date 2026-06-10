@@ -650,34 +650,11 @@ tbody tr.selected:hover {
 }
 
 .chips,
-.serviceBadges,
 .miniChips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 11px;
-}
-
-.serviceBadges span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 3px 7px;
-  border-radius: 4px;
-  background: #f0f3f6;
-  color: #64717d;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.serviceBadges .found {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
-.serviceBadges .error {
-  background: #fff6e6;
-  color: var(--warn);
 }
 
 .chips button,
@@ -1053,6 +1030,20 @@ tbody tr.selected:hover {
   font-size: 13px;
   font-weight: 400;
   text-transform: none;
+}
+
+.formField.isInvalid {
+  color: var(--accent-strong);
+}
+
+.formField.isInvalid input,
+.formField.isInvalid select,
+.formField.isInvalid textarea,
+input.isInvalid,
+select.isInvalid,
+textarea.isInvalid {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 2px rgba(200, 67, 67, 0.16);
 }
 
 .checkboxField {

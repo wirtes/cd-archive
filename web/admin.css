@@ -229,7 +229,8 @@
   color: var(--ink);
 }
 
-.userPanel {
+.userPanel,
+.settingsPanel {
   min-height: 240px;
   padding: 22px;
   border: 1px solid var(--line);
@@ -239,9 +240,54 @@
   box-shadow: 0 8px 24px rgba(16, 24, 40, 0.08);
 }
 
-.userPanel h2 {
+.settingsPanel {
+  grid-column: 1 / -1;
+  min-height: 0;
+}
+
+.userPanel h2,
+.settingsPanel h2 {
   margin: 0 0 14px;
   font-size: 18px;
+}
+
+.settingsPanel p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.columnOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-bottom: 16px;
+}
+
+.settingsPanel button {
+  min-height: 38px;
+  padding: 0 14px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 760;
+}
+
+#settingsMessage {
+  min-height: 18px;
+  margin: 10px 0 0;
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.adminForm label.isInvalid {
+  color: var(--accent-strong);
+}
+
+.adminForm input.isInvalid {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 2px rgba(200, 67, 67, 0.16);
 }
 
 .userPanel ul {

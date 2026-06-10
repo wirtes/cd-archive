@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Radio 1190 Catalog</title>
     <link rel="icon" href="/images/favicon.ico" />
-    <link rel="stylesheet" href="/styles.css?v=catalog-favicon-1" />
+    <link rel="stylesheet" href="/styles.css?v=columns-add-route-1" />
   </head>
   <body>
     <header class="topbar">
@@ -45,8 +45,7 @@
               </div>
             </div>
           </div>
-          <button id="addAlbumButton" class="addButton" type="button">Add</button>
-          <a class="addButton mobileAddButton" href="/mobile-add.html">Mobile Add</a>
+          <a class="addButton mobileAddButton" href="/add.html">Add</a>
         </div>
       </form>
     </header>
@@ -55,15 +54,7 @@
       <section class="results" aria-label="Catalog results">
         <div class="tableShell">
           <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Artist</th>
-                <th>Album</th>
-                <th>Format</th>
-                <th>Music Service</th>
-              </tr>
-            </thead>
+            <thead id="albumHead"></thead>
             <tbody id="albumRows"></tbody>
           </table>
         </div>
@@ -84,6 +75,6 @@
       <img id="lightboxImage" alt="" />
     </div>
 
-    <script src="/app.js?v=catalog-favicon-1"></script>
+    <script src="/app.js?v=columns-add-route-1"></script>
   </body>
 </html>

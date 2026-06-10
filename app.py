@@ -72,6 +72,13 @@ DEFAULT_PORT = 8190
 DEFAULT_HOST = "0.0.0.0"
 SESSION_COOKIE = "cd_archive_session"
 LOGIN_PATH = "/login.html"
+MAIN_LIST_COLUMNS = {
+    "row_number": "#",
+    "artist": "Artist",
+    "album": "Album",
+    "format": "Format",
+    "music_service": "Music Service",
+}
 PUBLIC_PATHS = {
     LOGIN_PATH,
     "/login.css",
@@ -389,6 +396,15 @@ def ensure_database_schema():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_events_user_id ON scan_events(username, id)")
         load_dotenv()
         default_user = os.environ.get("APP_USERNAME", "admin")
@@ -430,6 +446,46 @@ def ensure_database_schema():
         conn.commit()
     finally:
         conn.close()
+
+
+def default_list_columns():
+    return list(MAIN_LIST_COLUMNS.keys())
+
+
+def normalize_list_columns(columns):
+    allowed = set(MAIN_LIST_COLUMNS)
+    normalized = []
+    for column in columns if isinstance(columns, list) else []:
+        if column in allowed and column not in normalized:
+            normalized.append(column)
+    return normalized or default_list_columns()
+
+
+def get_app_settings(conn):
+    row = conn.execute("SELECT value FROM app_settings WHERE key = 'main_list_columns'").fetchone()
+    try:
+        columns = json.loads(row["value"]) if row else default_list_columns()
+    except (TypeError, json.JSONDecodeError):
+        columns = default_list_columns()
+    return {
+        "available_columns": [{"key": key, "label": label} for key, label in MAIN_LIST_COLUMNS.items()],
+        "main_list_columns": normalize_list_columns(columns),
+    }
+
+
+def save_app_settings(conn, payload):
+    settings = get_app_settings(conn)
+    if "main_list_columns" in payload:
+        settings["main_list_columns"] = normalize_list_columns(payload.get("main_list_columns"))
+    conn.execute(
+        """
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES ('main_list_columns', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        (json.dumps(settings["main_list_columns"], ensure_ascii=False), utc_now()),
+    )
+    return settings
 
 
 def get_album_bundle(conn, album_id):
@@ -615,8 +671,24 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def redirect_mobile_add(self):
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", "/add.html")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_HEAD(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/mobile-add.html":
+            self.redirect_mobile_add()
+            return
+        super().do_HEAD()
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/mobile-add.html":
+            self.redirect_mobile_add()
+            return
         if not self.is_public_path(parsed) and not self.require_auth(parsed):
             return
         if parsed.path.startswith("/covers/"):
@@ -634,7 +706,11 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         elif parsed.path == "/api/tags":
             self.handle_tags()
         elif parsed.path == "/api/session":
-            self.send_json({"username": self.current_user, "roles": getattr(self, "current_roles", {})})
+            with self.db() as conn:
+                settings = get_app_settings(conn)
+            self.send_json({"username": self.current_user, "roles": getattr(self, "current_roles", {}), "settings": settings})
+        elif parsed.path == "/api/settings":
+            self.handle_get_settings()
         elif parsed.path == "/api/scan-events":
             self.handle_scan_events(parsed)
         elif parsed.path == "/api/users":
@@ -661,6 +737,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             self.handle_create_scan_event()
         elif parsed.path == "/api/users":
             self.handle_create_user()
+        elif parsed.path == "/api/settings":
+            self.handle_save_settings()
         elif parsed.path == "/api/albums":
             self.handle_create_album()
         elif parsed.path.startswith("/api/albums/") and parsed.path.endswith("/music-service-url"):
@@ -839,6 +917,23 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 ]
             }
         )
+
+    def handle_get_settings(self):
+        with self.db() as conn:
+            self.send_json(get_app_settings(conn))
+
+    def handle_save_settings(self):
+        if not self.require_admin():
+            return
+        try:
+            payload = self.read_json_body()
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid request."}, HTTPStatus.BAD_REQUEST)
+            return
+        with self.db() as conn:
+            settings = save_app_settings(conn, payload)
+            conn.commit()
+        self.send_json(settings)
 
     def handle_create_user(self):
         if not self.require_admin():

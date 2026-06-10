@@ -11,6 +11,14 @@ const state = {
   selectedId: null,
   username: "",
   roles: { admin: false, editor: false },
+  columns: ["row_number", "artist", "album", "format", "music_service"],
+  availableColumns: [
+    { key: "row_number", label: "#" },
+    { key: "artist", label: "Artist" },
+    { key: "album", label: "Album" },
+    { key: "format", label: "Format" },
+    { key: "music_service", label: "Music Service" },
+  ],
 };
 
 const MUSIC_PREVIEWS_ENABLED = false;
@@ -23,6 +31,7 @@ const previewCache = new Map();
 const albumPreviewCache = new Map();
 
 const rowsEl = document.querySelector("#albumRows");
+const headEl = document.querySelector("#albumHead");
 const tableShell = document.querySelector(".tableShell");
 const detailEl = document.querySelector("#detailPane");
 const pageLabel = document.querySelector("#pageLabel");
@@ -32,7 +41,6 @@ const searchForm = document.querySelector("#searchForm");
 const searchInput = document.querySelector("#searchInput");
 const hideNaInput = document.querySelector("#hideNaInput");
 const searchTracksInput = document.querySelector("#searchTracksInput");
-const addAlbumButton = document.querySelector("#addAlbumButton");
 const adminLink = document.querySelector("#adminLink");
 const sessionUser = document.querySelector("#sessionUser");
 const accountMenuButton = document.querySelector("#accountMenuButton");
@@ -58,8 +66,9 @@ async function loadSession() {
   const payload = await response.json();
   state.username = payload.username || "";
   state.roles = payload.roles || state.roles;
+  state.availableColumns = payload.settings?.available_columns || state.availableColumns;
+  state.columns = payload.settings?.main_list_columns || state.columns;
   if (sessionUser) sessionUser.textContent = state.username || "";
-  addAlbumButton.hidden = !canEditCatalog();
   adminLink.hidden = !state.roles.admin;
 }
 
@@ -359,6 +368,8 @@ async function loadAlbums(options = {}) {
 }
 
 function renderRows(albums) {
+  const columns = state.columns.length ? state.columns : state.availableColumns.map((column) => column.key);
+  headEl.innerHTML = `<tr>${columns.map((key) => `<th>${escapeHtml(state.availableColumns.find((column) => column.key === key)?.label || key)}</th>`).join("")}</tr>`;
   rowsEl.innerHTML = albums
     .map((album) => {
       const services = album.matched_services ? album.matched_services.split(",").map((service) => service.trim()).filter(Boolean) : [];
@@ -369,19 +380,22 @@ function renderRows(albums) {
         album.format_matches_api || !album.api_formats?.length
           ? ""
           : `Catalog format not found in API formats: ${album.api_formats.join(", ")}`;
-      return `
-        <tr data-id="${album.id}" class="${album.id === state.selectedId ? "selected" : ""}">
-          <td>${escapeHtml(album.row_number)}</td>
-          <td>
+      const cells = {
+        row_number: `<td>${escapeHtml(album.row_number)}</td>`,
+        artist: `<td>
             ${renderArtistName(album.artist)}
             <div class="subtle radioId">1190_ID: ${escapeHtml(album.catalog_number)}</div>
-          </td>
-          <td>
+          </td>`,
+        album: `<td>
             <div>${escapeHtml(album.album_name)}</div>
             ${album.label ? `<button class="labelLink metaLine" type="button" data-label="${escapeAttribute(album.label)}">${escapeHtml(album.label)}</button>` : ""}
-          </td>
-          <td><span class="${formatClass}" title="${escapeAttribute(formatTitle)}">${escapeHtml(album.format || album.media_format)}</span></td>
-          <td><span class="${badgeClass}">${escapeHtml(serviceText)}</span></td>
+          </td>`,
+        format: `<td><span class="${formatClass}" title="${escapeAttribute(formatTitle)}">${escapeHtml(album.format || album.media_format)}</span></td>`,
+        music_service: `<td><span class="${badgeClass}">${escapeHtml(serviceText)}</span></td>`,
+      };
+      return `
+        <tr data-id="${album.id}" class="${album.id === state.selectedId ? "selected" : ""}">
+          ${columns.map((key) => cells[key]).filter(Boolean).join("")}
         </tr>
       `;
     })
@@ -414,7 +428,6 @@ function renderDetail(payload) {
   const frontCover = covers.find((cover) => cover.is_front) || covers[0];
   const coverUrl = frontCover?.local_image_url || frontCover?.thumbnail_large || frontCover?.thumbnail_small || frontCover?.image_url;
   const genreChips = renderGenreChips(genres, external);
-  const serviceBadges = renderServiceBadges(services);
   const providerBlocks = renderProviderBlocks(external);
   const trackList = renderTracks(appleAlbum, tracks);
   const artistBlock = album.compilation || isVariousArtist(album.artist) ? "" : renderArtistBlock(artist);
@@ -432,7 +445,6 @@ function renderDetail(payload) {
     <h2>${escapeHtml(album.album_name)}</h2>
     <p class="metaLine">${renderArtistName(album.artist, "inline")} · row ${escapeHtml(album.row_number)}</p>
 
-    ${serviceBadges}
     ${genreChips}
 
     <h3>Catalog</h3>
@@ -479,20 +491,6 @@ function renderRecordingIds(tracks) {
           : ""
       }
     </details>
-  `;
-}
-
-function renderServiceBadges(services) {
-  if (!services.length) return "";
-  return `
-    <div class="serviceBadges">
-      ${services
-        .map((service) => {
-          const status = service.found ? "found" : service.lookup_status;
-          return `<span class="${escapeAttribute(status)}" title="${escapeAttribute(service.lookup_error || service.title || "")}">${escapeHtml(sourceLabel(service.provider))}: ${escapeHtml(service.lookup_status)}</span>`;
-        })
-        .join("")}
-    </div>
   `;
 }
 
@@ -703,11 +701,6 @@ function showAlbumForm(mode = "add", payload = null) {
   renderTrackEditorRows(detailEl.querySelector(".addAlbumForm"), isEdit ? payload?.tracks || [] : []);
 }
 
-function showAddAlbumForm() {
-  if (!canEditCatalog()) return;
-  showAlbumForm("add");
-}
-
 function addFormValues(form) {
   const values = {};
   for (const field of addAlbumFields) {
@@ -834,6 +827,16 @@ function populateAddFormFromBundle(form, payload) {
   setAddField(form, "format", formatOptionValue(album.format), false);
   showAddCoverPreview(firstCoverUrl(payload.cover_art || []));
   renderTrackEditorRows(form, payload.tracks || []);
+}
+
+function setFieldInvalid(control, invalid = true) {
+  if (!control) return;
+  control.classList.toggle("isInvalid", invalid);
+  control.closest(".formField")?.classList.toggle("isInvalid", invalid);
+}
+
+function clearFormInvalidState(form) {
+  form.querySelectorAll(".isInvalid").forEach((element) => element.classList.remove("isInvalid"));
 }
 
 async function updateTrackPreviewAvailability(album, appleAlbum, tracks) {
@@ -995,8 +998,6 @@ searchTracksInput.addEventListener("change", () => {
   state.offset = 0;
   loadAlbums();
 });
-
-addAlbumButton.addEventListener("click", showAddAlbumForm);
 
 rowsEl.addEventListener("click", (event) => {
   const artistButton = event.target.closest("[data-artist]");
@@ -1269,13 +1270,18 @@ async function saveAddedAlbum(form) {
   const isEdit = form.dataset.mode === "edit";
   const serviceUrl = form.elements.music_service_url?.value.trim() || "";
   const tracks = trackEditorValues(form);
+  clearFormInvalidState(form);
   if (!values.catalog_number) {
     message.textContent = "1190_ID is required.";
+    setFieldInvalid(form.elements.catalog_number);
     form.elements.catalog_number?.focus();
     return;
   }
   if (!values.artist && !values.album_name && !serviceUrl) {
     message.textContent = "Artist, album name, or Discogs URL is required.";
+    setFieldInvalid(form.elements.artist);
+    setFieldInvalid(form.elements.album_name);
+    setFieldInvalid(form.elements.music_service_url);
     return;
   }
   message.textContent = "Saving album...";

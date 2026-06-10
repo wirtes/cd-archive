@@ -7,8 +7,12 @@ const accountMenu = document.querySelector("#accountMenu");
 const logoutButton = document.querySelector("#logoutButton");
 const clearUserFormButton = document.querySelector("#clearUserForm");
 const userFormTitle = document.querySelector("#userFormTitle");
+const columnSettingsForm = document.querySelector("#columnSettingsForm");
+const columnOptions = document.querySelector("#columnOptions");
+const settingsMessage = document.querySelector("#settingsMessage");
 
 let users = [];
+let availableColumns = [];
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -43,6 +47,7 @@ function roleText(user) {
 
 function resetUserForm(clearMessage = true) {
   userForm.reset();
+  clearInvalidState(userForm);
   userForm.elements.username.readOnly = false;
   userForm.elements.is_active.checked = true;
   if (userFormTitle) userFormTitle.textContent = "Create User";
@@ -60,6 +65,16 @@ function editUser(username) {
   userForm.elements.is_editor.checked = Boolean(user.is_editor);
   if (userFormTitle) userFormTitle.textContent = `Edit ${user.username}`;
   message.textContent = "Leave password blank to keep it unchanged.";
+}
+
+function setFieldInvalid(control, invalid = true) {
+  if (!control) return;
+  control.classList.toggle("isInvalid", invalid);
+  control.closest("label")?.classList.toggle("isInvalid", invalid);
+}
+
+function clearInvalidState(form) {
+  form.querySelectorAll(".isInvalid").forEach((element) => element.classList.remove("isInvalid"));
 }
 
 async function loadUsers() {
@@ -97,9 +112,44 @@ async function loadUsers() {
   `;
 }
 
+function renderColumnSettings(settings) {
+  availableColumns = settings.available_columns || [];
+  const enabled = new Set(settings.main_list_columns || availableColumns.map((column) => column.key));
+  columnOptions.innerHTML = availableColumns
+    .map(
+      (column) => `
+        <label class="roleOption">
+          <input name="main_list_columns" type="checkbox" value="${escapeAttribute(column.key)}" ${enabled.has(column.key) ? "checked" : ""} />
+          <span>${escapeHtml(column.label)}</span>
+        </label>
+      `
+    )
+    .join("");
+}
+
+async function loadSettings() {
+  const response = await fetch("/api/settings");
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Unable to load settings.");
+  renderColumnSettings(payload);
+}
+
 userForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(userForm);
+  clearInvalidState(userForm);
+  if (!form.get("username")) {
+    setFieldInvalid(userForm.elements.username);
+    message.textContent = "Username is required.";
+    userForm.elements.username.focus();
+    return;
+  }
+  if (!userForm.elements.username.readOnly && !form.get("password")) {
+    setFieldInvalid(userForm.elements.password);
+    message.textContent = "Password is required for new users.";
+    userForm.elements.password.focus();
+    return;
+  }
   message.textContent = "Saving user...";
   try {
     const response = await fetch("/api/users", {
@@ -120,6 +170,25 @@ userForm.addEventListener("submit", async (event) => {
     loadUsers();
   } catch (error) {
     message.textContent = error.message;
+  }
+});
+
+columnSettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const selected = [...columnSettingsForm.querySelectorAll("input[name='main_list_columns']:checked")].map((input) => input.value);
+  settingsMessage.textContent = "Saving columns...";
+  try {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ main_list_columns: selected }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to save column settings.");
+    renderColumnSettings(payload);
+    settingsMessage.textContent = "Column settings saved.";
+  } catch (error) {
+    settingsMessage.textContent = error.message;
   }
 });
 
@@ -147,6 +216,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") setAccountMenuOpen(false);
 });
 
-loadUsers().catch((error) => {
+Promise.all([loadUsers(), loadSettings()]).catch((error) => {
   message.textContent = error.message;
 });
