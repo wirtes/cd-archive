@@ -197,6 +197,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
             track_number TEXT,
             title TEXT,
             length_ms INTEGER,
+            explicit INTEGER NOT NULL DEFAULT 0,
             recording_id TEXT,
             FOREIGN KEY(album_id) REFERENCES albums(id) ON DELETE CASCADE
         );
@@ -646,6 +647,7 @@ def replace_tracks(conn: sqlite3.Connection, album_id: int, release: dict | None
                     track.get("number"),
                     track.get("title") or recording.get("title"),
                     track.get("length") or recording.get("length"),
+                    0,
                     recording.get("id"),
                 )
             )
@@ -653,8 +655,8 @@ def replace_tracks(conn: sqlite3.Connection, album_id: int, release: dict | None
         """
         INSERT INTO tracks (
             album_id, medium_position, medium_title, medium_format,
-            track_position, track_number, title, length_ms, recording_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            track_position, track_number, title, length_ms, explicit, recording_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -1449,6 +1451,7 @@ def insert_discogs_tracks(conn: sqlite3.Connection, album_id: int, payload: dict
                 track.get("position") or str(index),
                 display_title,
                 duration_to_ms(track.get("duration")),
+                0,
                 f"discogs:{payload.get('id')}:{track.get('position') or index}",
             )
         )
@@ -1460,8 +1463,8 @@ def insert_discogs_tracks(conn: sqlite3.Connection, album_id: int, payload: dict
         """
         INSERT INTO tracks (
             album_id, medium_position, medium_title, medium_format, track_position,
-            track_number, title, length_ms, recording_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            track_number, title, length_ms, explicit, recording_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )

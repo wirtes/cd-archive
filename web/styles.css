@@ -715,6 +715,20 @@ tbody tr.selected:hover {
   overflow-wrap: anywhere;
 }
 
+.explicitBadge {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--accent-strong);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
 .previewButton {
   position: relative;
   width: 18px;
@@ -988,6 +1002,72 @@ tbody tr.selected:hover {
   display: none;
 }
 
+.trackEditor {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.trackEditorHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trackEditorHead h3 {
+  margin: 0;
+}
+
+.trackRows {
+  display: grid;
+  gap: 8px;
+}
+
+.trackEditRow {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) 108px 32px;
+  gap: 8px;
+  align-items: end;
+}
+
+.trackEditRow label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.trackEditRow input[type="text"] {
+  width: 100%;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: none;
+}
+
+.trackEditRow .explicitCheck {
+  justify-items: start;
+}
+
+.trackEditRow input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 4px 0 0;
+  accent-color: var(--accent);
+}
+
+.iconButton {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
 .formActions {
   display: flex;
   align-items: center;
@@ -1049,6 +1129,14 @@ tbody tr.selected:hover {
 
   .formGrid {
     grid-template-columns: 1fr;
+  }
+
+  .trackEditRow {
+    grid-template-columns: 64px minmax(0, 1fr) 32px;
+  }
+
+  .trackEditRow .explicitCheck {
+    grid-column: 1 / -1;
   }
 
   th:nth-child(4),

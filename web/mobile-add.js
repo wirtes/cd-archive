@@ -233,7 +233,7 @@ async function lookupBarcode(barcode) {
     barcodeInput.value = payload.barcode || clean;
     showRelease(payload);
     await publishScan(payload);
-    setStatus("Release found. Add an 1190_ID, then hit Add.");
+    setStatus("Release found. Add an 1190_ID, then hit Add Album.");
   } catch (error) {
     currentRelease = null;
     setStatus(error.message, true);
@@ -336,7 +336,7 @@ async function loadDesktopServiceUrl() {
     showRelease(currentRelease);
     if (desktopServiceMessage) desktopServiceMessage.textContent = "Loaded Discogs data. Review the fields before saving.";
     if (desktopListenerStatus) desktopListenerStatus.textContent = "Discogs URL loaded. Review the form, then click Add.";
-    setStatus("Album info loaded. Add an 1190_ID, then hit Add.");
+    setStatus("Album info loaded. Add an 1190_ID, then hit Add Album.");
   } catch (error) {
     if (desktopServiceMessage) desktopServiceMessage.textContent = error.message;
   } finally {

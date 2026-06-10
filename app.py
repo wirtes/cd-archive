@@ -318,6 +318,9 @@ def ensure_database_schema():
         columns = {row[1] for row in conn.execute("PRAGMA table_info(albums)").fetchall()}
         if "compilation" not in columns:
             conn.execute("ALTER TABLE albums ADD COLUMN compilation INTEGER NOT NULL DEFAULT 0")
+        track_columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)").fetchall()}
+        if "explicit" not in track_columns:
+            conn.execute("ALTER TABLE tracks ADD COLUMN explicit INTEGER NOT NULL DEFAULT 0")
         conn.execute(
             """
             UPDATE albums
@@ -346,7 +349,7 @@ def get_album_bundle(conn, album_id):
     tracks = conn.execute(
         """
         SELECT medium_position, medium_title, medium_format, track_position,
-               track_number, title, length_ms, recording_id
+               track_number, title, length_ms, explicit, recording_id
         FROM tracks
         WHERE album_id = ?
         ORDER BY medium_position, track_position, id
@@ -1220,6 +1223,57 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             ),
         )
 
+    def parse_tracks_payload(self, payload):
+        rows = []
+        for index, item in enumerate(payload if isinstance(payload, list) else [], start=1):
+            title = clean_text((item or {}).get("title"))
+            track_number = clean_text((item or {}).get("track_number")) or str(index)
+            if not title:
+                continue
+            rows.append(
+                {
+                    "medium_position": 1,
+                    "medium_title": "",
+                    "medium_format": "",
+                    "track_position": index,
+                    "track_number": track_number,
+                    "title": title,
+                    "length_ms": None,
+                    "explicit": 1 if (item or {}).get("explicit") in (True, "true", "1", "on", 1) else 0,
+                    "recording_id": clean_text((item or {}).get("recording_id")) or f"user:{index}",
+                }
+            )
+        return rows
+
+    def replace_album_tracks(self, conn, album_id, tracks):
+        rows = self.parse_tracks_payload(tracks)
+        conn.execute("DELETE FROM tracks WHERE album_id = ?", (album_id,))
+        if not rows:
+            return
+        conn.executemany(
+            """
+            INSERT INTO tracks (
+                album_id, medium_position, medium_title, medium_format, track_position,
+                track_number, title, length_ms, explicit, recording_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    album_id,
+                    row["medium_position"],
+                    row["medium_title"],
+                    row["medium_format"],
+                    row["track_position"],
+                    row["track_number"],
+                    row["title"],
+                    row["length_ms"],
+                    row["explicit"],
+                    row["recording_id"],
+                )
+                for row in rows
+            ],
+        )
+
     def handle_create_album(self):
         if not self.require_editor():
             return
@@ -1244,6 +1298,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 if service_url:
                     result = enrich_album_from_discogs_url(conn, album_id, service_url, refresh_cache=False)
                     self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
+                if "tracks" in payload:
+                    self.replace_album_tracks(conn, album_id, payload.get("tracks"))
                 self.save_uploaded_cover(conn, album_id, payload.get("cover_data_url"))
                 conn.commit()
                 bundle = get_album_bundle(conn, album_id)
@@ -1289,6 +1345,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 if service_url:
                     result = enrich_album_from_service_url(conn, album_id, service_url, refresh_cache=False)
                     self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
+                if "tracks" in payload:
+                    self.replace_album_tracks(conn, album_id, payload.get("tracks"))
                 self.save_uploaded_cover(conn, album_id, payload.get("cover_data_url"))
                 conn.commit()
                 bundle = get_album_bundle(conn, album_id)

@@ -23,6 +23,7 @@ const previewCache = new Map();
 const albumPreviewCache = new Map();
 
 const rowsEl = document.querySelector("#albumRows");
+const tableShell = document.querySelector(".tableShell");
 const detailEl = document.querySelector("#detailPane");
 const pageLabel = document.querySelector("#pageLabel");
 const prevPage = document.querySelector("#prevPage");
@@ -323,7 +324,7 @@ async function loadStats() {
   `;
 }
 
-async function loadAlbums() {
+async function loadAlbums(options = {}) {
   const params = new URLSearchParams({
     q: state.q,
     tag: state.tag,
@@ -339,6 +340,9 @@ async function loadAlbums() {
   state.total = payload.total;
   renderRows(payload.albums);
   renderPager();
+  if (options.scrollToTop && tableShell) {
+    tableShell.scrollTop = 0;
+  }
 }
 
 function renderRows(albums) {
@@ -532,6 +536,7 @@ function renderTracks(album, tracks) {
                   hidden
                   aria-label="Play preview"
                 ></button>
+                ${track.explicit ? `<span class="explicitBadge" title="Explicit lyrics" aria-label="Explicit lyrics">E</span>` : ""}
                 <span>${renderTrackTitle(album, track.title)}</span>
                 <span class="previewMessage" role="status"></span>
               </span>
@@ -646,6 +651,13 @@ function showAlbumForm(mode = "add", payload = null) {
         </label>
       </div>
       <div class="coverPreview" data-cover-preview hidden></div>
+      <section class="trackEditor" aria-label="Song list">
+        <div class="trackEditorHead">
+          <h3>Song List</h3>
+          <button type="button" data-add-track-row>Add Track</button>
+        </div>
+        <div class="trackRows" data-track-rows></div>
+      </section>
       <div class="formActions">
         <button class="primaryButton" type="submit">${isEdit ? "Save Changes" : "Save Album"}</button>
         <button type="button" data-cancel-add>Cancel</button>
@@ -655,6 +667,7 @@ function showAlbumForm(mode = "add", payload = null) {
   if (isEdit) {
     populateAlbumFormFromAlbum(detailEl.querySelector(".addAlbumForm"), album);
   }
+  renderTrackEditorRows(detailEl.querySelector(".addAlbumForm"), isEdit ? payload?.tracks || [] : []);
 }
 
 function showAddAlbumForm() {
@@ -672,6 +685,54 @@ function addFormValues(form) {
     }
   }
   return values;
+}
+
+function renderTrackEditorRow(track = {}, index = 0) {
+  const trackNumber = track.track_number || track.track_position || String(index + 1);
+  return `
+    <div class="trackEditRow">
+      <label>
+        <span>#</span>
+        <input name="track_number" type="text" value="${escapeAttribute(trackNumber)}" />
+      </label>
+      <label>
+        <span>Title</span>
+        <input name="title" type="text" value="${escapeAttribute(track.title || "")}" />
+      </label>
+      <label class="explicitCheck">
+        <span>Explicit Lyrics</span>
+        <input name="explicit" type="checkbox" ${track.explicit ? "checked" : ""} />
+      </label>
+      <button type="button" class="iconButton" data-remove-track-row aria-label="Remove track">×</button>
+    </div>
+  `;
+}
+
+function renderTrackEditorRows(form, tracks = []) {
+  const rows = form?.querySelector("[data-track-rows]");
+  if (!rows) return;
+  form.dataset.tracksLoaded = tracks.length ? "1" : "";
+  const source = tracks.length ? tracks : [{ track_number: "1", title: "", explicit: false }];
+  rows.innerHTML = source.map(renderTrackEditorRow).join("");
+}
+
+function addTrackEditorRow(form, track = {}) {
+  const rows = form?.querySelector("[data-track-rows]");
+  if (!rows) return;
+  form.dataset.tracksLoaded = "1";
+  const index = rows.querySelectorAll(".trackEditRow").length;
+  rows.insertAdjacentHTML("beforeend", renderTrackEditorRow(track, index));
+}
+
+function trackEditorValues(form) {
+  return [...form.querySelectorAll(".trackEditRow")]
+    .map((row, index) => {
+      const title = row.querySelector("input[name='title']")?.value.trim() || "";
+      const trackNumber = row.querySelector("input[name='track_number']")?.value.trim() || String(index + 1);
+      const explicit = Boolean(row.querySelector("input[name='explicit']")?.checked);
+      return { track_number: trackNumber, title, explicit };
+    })
+    .filter((track) => track.title);
 }
 
 function setAddField(form, name, value, overwrite = true) {
@@ -739,6 +800,7 @@ function populateAddFormFromBundle(form, payload) {
   Object.entries(values).forEach(([name, value]) => setAddField(form, name, value));
   setAddField(form, "format", formatOptionValue(album.format), false);
   showAddCoverPreview(firstCoverUrl(payload.cover_art || []));
+  renderTrackEditorRows(form, payload.tracks || []);
 }
 
 async function updateTrackPreviewAvailability(album, appleAlbum, tracks) {
@@ -945,6 +1007,20 @@ detailEl.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-delete-album]");
   if (deleteButton && currentDetailPayload) {
     deleteAlbum(Number(deleteButton.dataset.deleteAlbum));
+    return;
+  }
+  const addTrackButton = event.target.closest("[data-add-track-row]");
+  if (addTrackButton) {
+    addTrackEditorRow(addTrackButton.closest(".addAlbumForm"));
+    return;
+  }
+  const removeTrackButton = event.target.closest("[data-remove-track-row]");
+  if (removeTrackButton) {
+    const form = removeTrackButton.closest(".addAlbumForm");
+    removeTrackButton.closest(".trackEditRow")?.remove();
+    if (!form.querySelector(".trackEditRow")) {
+      addTrackEditorRow(form);
+    }
     return;
   }
   const cancelAdd = event.target.closest("[data-cancel-add]");
@@ -1159,6 +1235,7 @@ async function saveAddedAlbum(form) {
   const values = addFormValues(form);
   const isEdit = form.dataset.mode === "edit";
   const serviceUrl = form.elements.music_service_url?.value.trim() || "";
+  const tracks = trackEditorValues(form);
   if (!values.catalog_number) {
     message.textContent = "1190_ID is required.";
     form.elements.catalog_number?.focus();
@@ -1178,6 +1255,7 @@ async function saveAddedAlbum(form) {
         album: values,
         music_service_url: serviceUrl,
         cover_data_url: addCoverDataUrl,
+        ...(isEdit || tracks.length || form.dataset.tracksLoaded ? { tracks } : {}),
       }),
     });
     const payload = await response.json();
@@ -1261,12 +1339,12 @@ function searchByLabel(label) {
 
 prevPage.addEventListener("click", () => {
   state.offset = Math.max(0, state.offset - state.limit);
-  loadAlbums();
+  loadAlbums({ scrollToTop: true });
 });
 
 nextPage.addEventListener("click", () => {
   state.offset += state.limit;
-  loadAlbums();
+  loadAlbums({ scrollToTop: true });
 });
 
 logoutButton?.addEventListener("click", logout);

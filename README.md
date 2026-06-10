@@ -20,7 +20,7 @@ The master album fields currently filled from those services are:
 
 `format` is catalog-supplied only. The current catalog assumes imported spreadsheet items are CDs, and the web Add/Edit form treats `format` as the single user-facing format field. External services can be used to check whether the supplied format appears in API data, but they do not overwrite the catalog format.
 
-Every album keeps normalized provider records in `external_metadata`, one row per matched or attempted service. MusicBrainz, Discogs, and Last.fm are peers in that table. Some services also populate service-specific helper tables when they expose richer data; for example, `musicbrainz_metadata` stores detailed MusicBrainz release fields, and Discogs/MusicBrainz can both populate `tracks`.
+Every album keeps normalized provider records in `external_metadata`, one row per matched or attempted service. MusicBrainz, Discogs, and Last.fm are peers in that table. Some services also populate service-specific helper tables when they expose richer data; for example, `musicbrainz_metadata` stores detailed MusicBrainz release fields, and Discogs/MusicBrainz can both populate editable `tracks`.
 
 `Various`, `V/A`, and `VA` are normalized to the special display value `Various Artists`. Compilation rows suppress artist profile display, and compilation tracks rendered as `Artist - Song` make the track artist clickable for an artist search.
 
@@ -427,6 +427,7 @@ erDiagram
         text track_number
         text title
         integer length_ms
+        integer explicit
         text recording_id
     }
 
@@ -559,7 +560,7 @@ flowchart LR
 - `api_cache` stores raw JSON responses keyed by provider and request, so routine rebuilds avoid unnecessary API calls.
 - `external_metadata` stores normalized provider records for MusicBrainz, Discogs, and Last.fm.
 - `musicbrainz_metadata` is a service-specific detail/cache table for MusicBrainz release fields. It does not make MusicBrainz the master service model; MusicBrainz also has a normalized row in `external_metadata` like Discogs and Last.fm.
-- `tracks` can be populated from MusicBrainz or Discogs. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.
+- `tracks` can be populated from MusicBrainz or Discogs, edited in the Add/Edit form, and marked with `explicit` for explicit lyrics display. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.
 - `album_service_status` records whether each service was found, not found, errored, or not configured.
 - Album art and artist images are stored as local files and referenced by local web paths.
-- The app is intended for local use and does not implement authentication.
+- The app requires authenticated sessions. Admin users can create users and assign admin/editor roles; users without admin or editor roles can browse but cannot add, edit, or delete catalog rows.
