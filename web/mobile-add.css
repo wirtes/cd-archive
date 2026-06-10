@@ -294,6 +294,7 @@ dd {
 
   .statusMessage {
     grid-column: 1 / -1;
+    grid-row: 1;
   }
 
   .scannerPanel {
@@ -304,6 +305,18 @@ dd {
   .lookupForm,
   .releaseCard {
     grid-column: 1;
+  }
+
+  .desktopQrPanel {
+    grid-row: 2;
+  }
+
+  .lookupForm {
+    grid-row: 3;
+  }
+
+  .releaseCard {
+    grid-row: 4;
   }
 
   .desktopQrPanel {
@@ -337,7 +350,7 @@ dd {
     display: grid;
     gap: 14px;
     grid-column: 2;
-    grid-row: 1 / span 4;
+    grid-row: 2 / span 4;
     padding: 16px;
     border: 1px solid var(--line);
     border-radius: 6px;
