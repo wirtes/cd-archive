@@ -2328,17 +2328,17 @@ def enrich_album_from_discogs_url(
     return {"provider": provider, "artist": anchor_artist, "album_name": anchor_title, "services": [dict(row) for row in services]}
 
 
-def enrich_first_albums(conn: sqlite3.Connection, limit: int, refresh_cache: bool) -> None:
+def enrich_first_albums(conn: sqlite3.Connection, limit: int, offset: int, refresh_cache: bool) -> None:
     rows = conn.execute(
         """
         SELECT id, row_number, artist, album_name
         FROM albums
         ORDER BY row_number
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """,
-        (limit,),
+        (limit, offset),
     ).fetchall()
-    for offset, row in enumerate(rows):
+    for row in rows:
         album_id, row_number, artist, album_name = row
         used_musicbrainz_cache = True
         try:
@@ -2386,21 +2386,34 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Import the CD catalog CSV into SQLite and optionally enrich albums from local/API metadata providers.")
     parser.add_argument("--csv", type=Path, default=CSV_PATH)
     parser.add_argument("--db", type=Path, default=DB_PATH)
-    parser.add_argument("--enrich", type=int, default=0, help="Number of leading catalog rows to enrich.")
+    parser.add_argument("--enrich", type=int, default=0, help="Number of catalog rows to enrich.")
+    parser.add_argument("--offset", type=int, default=0, help="Number of catalog rows to skip before enriching.")
     parser.add_argument("--refresh-cache", action="store_true", help="Ignore cached API payloads and fetch fresh copies.")
     args = parser.parse_args()
+    if args.enrich < 0:
+        parser.error("--enrich must be 0 or greater.")
+    if args.offset < 0:
+        parser.error("--offset must be 0 or greater.")
 
+    db_exists = args.db.exists()
     args.db.parent.mkdir(parents=True, exist_ok=True)
-    rows = read_catalog_rows(args.csv)
     with sqlite3.connect(args.db) as conn:
         conn.row_factory = sqlite3.Row
-        create_schema(conn)
-        sanitize_cached_urls(conn)
-        import_catalog(conn, rows)
-        conn.commit()
+        if db_exists:
+            sanitize_cached_urls(conn)
+            conn.commit()
+        else:
+            rows = read_catalog_rows(args.csv)
+            create_schema(conn)
+            sanitize_cached_urls(conn)
+            import_catalog(conn, rows)
+            conn.commit()
         if args.enrich:
-            enrich_first_albums(conn, args.enrich, args.refresh_cache)
-    print(f"Wrote {len(rows)} catalog rows to {args.db}")
+            enrich_first_albums(conn, args.enrich, args.offset, args.refresh_cache)
+    if db_exists:
+        print(f"Updated existing database at {args.db}")
+    else:
+        print(f"Wrote {len(rows)} catalog rows to {args.db}")
 
 
 if __name__ == "__main__":
