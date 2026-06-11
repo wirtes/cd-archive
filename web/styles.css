@@ -761,6 +761,13 @@ tbody tr.selected:hover {
   color: var(--muted);
 }
 
+.providerDescription {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .tracks {
   display: grid;
   gap: 0;

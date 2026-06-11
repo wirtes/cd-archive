@@ -383,12 +383,12 @@ function renderRows(albums) {
       const cells = {
         row_number: `<td>${escapeHtml(album.row_number)}</td>`,
         artist: `<td>
-            ${renderArtistName(album.artist)}
+            ${escapeHtml(album.artist)}
             <div class="subtle radioId">1190_ID: ${escapeHtml(album.catalog_number)}</div>
           </td>`,
         album: `<td>
             <div>${escapeHtml(album.album_name)}</div>
-            ${album.label ? `<button class="labelLink metaLine" type="button" data-label="${escapeAttribute(album.label)}">${escapeHtml(album.label)}</button>` : ""}
+            ${album.label ? `<div class="metaLine">${escapeHtml(album.label)}</div>` : ""}
           </td>`,
         format: `<td><span class="${formatClass}" title="${escapeAttribute(formatTitle)}">${escapeHtml(album.format || album.media_format)}</span></td>`,
         music_service: `<td><span class="${badgeClass}">${escapeHtml(serviceText)}</span></td>`,
@@ -535,6 +535,7 @@ function renderProviderBlocks(external) {
               ${
                 provider.lookup_status === "matched"
                   ? `<div class="metaLine">${provider.artist ? `${renderArtistName(provider.artist, "inline")} · ` : ""}${escapeHtml(provider.title)}${provider.url ? ` · <a href="${escapeHtml(provider.url)}" target="_blank" rel="noreferrer">open</a>` : ""}</div>
+                     ${provider.description ? `<p class="providerDescription">${escapeHtml(provider.description)}</p>` : ""}
                      ${genres.length ? `<div class="miniChips">${genres.slice(0, 10).map((name) => `<button type="button" data-genre="${escapeAttribute(name)}">${escapeHtml(name)}</button>`).join("")}</div>` : ""}`
                   : `<div class="metaLine">${escapeHtml(provider.lookup_error || "No metadata returned")}</div>`
               }

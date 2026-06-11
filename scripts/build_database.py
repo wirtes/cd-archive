@@ -2,6 +2,7 @@
 import argparse
 import csv
 import datetime as dt
+import html
 import json
 import os
 import re
@@ -342,6 +343,25 @@ def json_request(url: str, headers: dict[str, str] | None = None) -> tuple[int, 
         return exc.code, None, f"HTTP Error {exc.code}: {exc.reason}"
 
 
+def text_request(url: str, headers: dict[str, str] | None = None) -> tuple[int, str | None, str | None]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+            **(headers or {}),
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.status, response.read().decode(charset, errors="ignore"), None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return exc.code, None, "not found"
+        return exc.code, None, f"HTTP Error {exc.code}: {exc.reason}"
+
+
 def throttle_api_request(provider: str) -> None:
     delay = API_THROTTLE_SECONDS.get(provider, 1.1)
     last_request_at = LAST_API_REQUEST_AT.get(provider)
@@ -393,6 +413,53 @@ def cached_json(
             status_code,
             utc_now(),
             json.dumps(payload, ensure_ascii=False) if payload is not None else None,
+            error,
+        ),
+    )
+    return payload, False, error
+
+
+def cached_text_metadata(
+    conn: sqlite3.Connection,
+    provider: str,
+    cache_key: str,
+    url: str,
+    refresh_cache: bool = False,
+) -> tuple[dict | None, bool, str | None]:
+    if not refresh_cache:
+        row = conn.execute(
+            """
+            SELECT raw_json, error
+            FROM api_cache
+            WHERE provider = ? AND cache_key = ?
+            """,
+            (provider, cache_key),
+        ).fetchone()
+        if row:
+            raw_json, error = row
+            return json.loads(raw_json) if raw_json else None, True, error
+
+    throttle_api_request(provider)
+    status_code, text, error = text_request(url)
+    payload = {"html": text} if text else {}
+    conn.execute(
+        """
+        INSERT INTO api_cache (provider, cache_key, url, status_code, fetched_at, raw_json, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, cache_key) DO UPDATE SET
+            url = excluded.url,
+            status_code = excluded.status_code,
+            fetched_at = excluded.fetched_at,
+            raw_json = excluded.raw_json,
+            error = excluded.error
+        """,
+        (
+            provider,
+            cache_key,
+            url,
+            status_code,
+            utc_now(),
+            json.dumps(payload, ensure_ascii=False) if payload else None,
             error,
         ),
     )
@@ -1789,10 +1856,69 @@ def apply_apple_track_explicitness(
     return len(rows)
 
 
-def upsert_apple_album(conn: sqlite3.Connection, album_id: int, album: dict, lookup_payload: dict, tracks_payload: dict | None) -> tuple[str | None, str | None]:
+def extract_html_meta_content(html_text: str, keys: list[str]) -> str | None:
+    for key in keys:
+        escaped_key = re.escape(key)
+        patterns = [
+            rf'<meta[^>]+(?:property|name)=["\']{escaped_key}["\'][^>]+content=["\']([^"\']+)["\']',
+            rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']{escaped_key}["\']',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html_text, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                value = html.unescape(match.group(1)).strip()
+                value = re.sub(r"\s+", " ", value)
+                if value:
+                    return value
+    return None
+
+
+def apple_album_description_from_page(
+    conn: sqlite3.Connection,
+    collection_id: str | None,
+    url: str | None,
+    refresh_cache: bool = False,
+) -> str | None:
+    if not collection_id or not url:
+        return None
+    cache_key = f"album-page:{collection_id}"
+    payload, _, error = cached_text_metadata(conn, "apple_itunes", cache_key, url, refresh_cache=refresh_cache)
+    if error or not payload:
+        return None
+    if payload.get("description"):
+        return payload["description"]
+    html_text = payload.get("html") or ""
+    description = extract_html_meta_content(
+        html_text,
+        ["music:description", "og:description", "twitter:description", "description"],
+    )
+    if description:
+        payload["description"] = description
+        payload.pop("html", None)
+        conn.execute(
+            "UPDATE api_cache SET raw_json = ? WHERE provider = ? AND cache_key = ?",
+            (json.dumps(payload, ensure_ascii=False), "apple_itunes", cache_key),
+        )
+    return description
+
+
+def upsert_apple_album(
+    conn: sqlite3.Connection,
+    album_id: int,
+    album: dict,
+    lookup_payload: dict,
+    tracks_payload: dict | None,
+    refresh_cache: bool = False,
+) -> tuple[str | None, str | None]:
     collection_id = album.get("collectionId")
     apple_tracks = apple_track_rows(tracks_payload or {})
     cover_url = apple_artwork_url(album.get("artworkUrl100") or album.get("artworkUrl60"))
+    description = apple_album_description_from_page(
+        conn,
+        str(collection_id) if collection_id else None,
+        album.get("collectionViewUrl"),
+        refresh_cache=refresh_cache,
+    )
     upsert_external_metadata(
         conn,
         album_id,
@@ -1809,7 +1935,10 @@ def upsert_apple_album(conn: sqlite3.Connection, album_id: int, album: dict, loo
             "styles": None,
             "track_count": album.get("trackCount") or len(apple_tracks),
             "cover_url": cover_url,
-            "raw_json": json.dumps({"search": lookup_payload, "lookup": tracks_payload or {}}, ensure_ascii=False),
+            "raw_json": json.dumps(
+                {"search": lookup_payload, "lookup": tracks_payload or {}, "description": description},
+                ensure_ascii=False,
+            ),
         },
     )
     upsert_service_status(
@@ -1901,7 +2030,7 @@ def fetch_apple_itunes(conn: sqlite3.Connection, album_id: int, artist: str, alb
         lookup_params = urllib.parse.urlencode({"id": collection_id, "entity": "song", "country": "US"})
         lookup_url = f"https://itunes.apple.com/lookup?{lookup_params}"
         lookup_payload, _, _ = cached_json(conn, "apple_itunes", f"collection:{collection_id}", lookup_url, refresh_cache=refresh_cache)
-    upsert_apple_album(conn, album_id, selected, payload or {}, lookup_payload or {})
+    upsert_apple_album(conn, album_id, selected, payload or {}, lookup_payload or {}, refresh_cache=refresh_cache)
 
 
 def fetch_apple_collection_id(conn: sqlite3.Connection, album_id: int, collection_id: str, refresh_cache: bool) -> tuple[str | None, str | None]:
@@ -1920,7 +2049,7 @@ def fetch_apple_collection_id(conn: sqlite3.Connection, album_id: int, collectio
     )
     if not album:
         raise ValueError("Apple iTunes album was not found.")
-    return upsert_apple_album(conn, album_id, album, {"results": [album]}, lookup_payload)
+    return upsert_apple_album(conn, album_id, album, {"results": [album]}, lookup_payload, refresh_cache=refresh_cache)
 
 
 def fetch_external_provider(

@@ -45,6 +45,7 @@ COVER_DIR = env_path("COVER_DIR", STATIC_DIR / "covers")
 ARTIST_IMAGE_DIR = env_path("ARTIST_IMAGE_DIR", STATIC_DIR / "artist-images")
 sys.path.insert(0, str(ROOT))
 from scripts.build_database import (
+    apple_album_description_from_page,
     apple_track_is_explicit,
     apple_track_rows,
     apply_apple_track_explicitness,
@@ -525,7 +526,7 @@ def get_album_bundle(conn, album_id):
     external = conn.execute(
         """
         SELECT provider, lookup_status, lookup_error, fetched_at, external_id,
-               url, title, artist, genres, styles, track_count, cover_url
+               url, title, artist, genres, styles, track_count, cover_url, raw_json
         FROM external_metadata
         WHERE album_id = ?
         ORDER BY CASE provider
@@ -565,6 +566,32 @@ def get_album_bundle(conn, album_id):
             """,
             (album["artist"],),
         ).fetchone()
+    external_rows = []
+    for row in external:
+        item = dict(row)
+        description = None
+        if item["provider"] == "apple_itunes" and item["lookup_status"] == "matched":
+            try:
+                raw_payload = json.loads(item.get("raw_json") or "{}")
+            except json.JSONDecodeError:
+                raw_payload = {}
+            description = raw_payload.get("description")
+            if not description:
+                description = apple_album_description_from_page(conn, item.get("external_id"), item.get("url"), refresh_cache=False)
+                if description:
+                    raw_payload["description"] = description
+                    conn.execute(
+                        """
+                        UPDATE external_metadata
+                        SET raw_json = ?
+                        WHERE album_id = ? AND provider = ?
+                        """,
+                        (json.dumps(raw_payload, ensure_ascii=False), album_id, item["provider"]),
+                    )
+        item["description"] = description
+        item.pop("raw_json", None)
+        external_rows.append(item)
+
     return {
         "album": dict(album),
         "artist": dict(artist_info) if artist_info else None,
@@ -572,7 +599,7 @@ def get_album_bundle(conn, album_id):
         "tracks": [dict(row) for row in tracks],
         "genres": [dict(row) for row in genres],
         "cover_art": [dict(row) for row in cover_art],
-        "external": [dict(row) for row in external],
+        "external": external_rows,
         "services": [dict(row) for row in services],
     }
 
@@ -671,24 +698,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def redirect_mobile_add(self):
-        self.send_response(HTTPStatus.FOUND)
-        self.send_header("Location", "/add.html")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def do_HEAD(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/mobile-add.html":
-            self.redirect_mobile_add()
-            return
-        super().do_HEAD()
-
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/mobile-add.html":
-            self.redirect_mobile_add()
-            return
         if not self.is_public_path(parsed) and not self.require_auth(parsed):
             return
         if parsed.path.startswith("/covers/"):
