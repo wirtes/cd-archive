@@ -397,19 +397,50 @@ th {
   letter-spacing: 0;
 }
 
-th:nth-child(1),
-td:nth-child(1) {
+.col-row_number {
   width: 58px;
 }
 
-th:nth-child(4),
-td:nth-child(4) {
+.col-cover {
+  width: 58px;
+}
+
+.col-format {
   width: 120px;
 }
 
-th:nth-child(5),
-td:nth-child(5) {
+.col-music_service {
   width: 178px;
+}
+
+.coverThumb {
+  display: block;
+  width: 38px;
+  height: 38px;
+  border-radius: 3px;
+  object-fit: cover;
+  background: #eef2f5;
+  box-shadow: inset 0 0 0 1px #d8e0e7;
+}
+
+.coverPlaceholder {
+  position: relative;
+}
+
+.coverPlaceholder::before,
+.coverPlaceholder::after {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border: 2px solid #c8d2dc;
+}
+
+.coverPlaceholder::after {
+  inset: auto 9px 9px;
+  height: 10px;
+  border-top: 0;
+  transform: skewY(-20deg);
+  transform-origin: left bottom;
 }
 
 tr {
@@ -1237,10 +1268,8 @@ textarea.isInvalid {
     grid-column: 1 / -1;
   }
 
-  th:nth-child(4),
-  td:nth-child(4),
-  th:nth-child(5),
-  td:nth-child(5) {
+  .col-format,
+  .col-music_service {
     width: 118px;
   }
 }

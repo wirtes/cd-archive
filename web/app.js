@@ -11,9 +11,10 @@ const state = {
   selectedId: null,
   username: "",
   roles: { admin: false, editor: false },
-  columns: ["row_number", "artist", "album", "format", "music_service"],
+  columns: ["row_number", "cover", "artist", "album", "format", "music_service"],
   availableColumns: [
     { key: "row_number", label: "#" },
+    { key: "cover", label: "Cover" },
     { key: "artist", label: "Artist" },
     { key: "album", label: "Album" },
     { key: "format", label: "Format" },
@@ -58,7 +59,7 @@ function canEditCatalog() {
 }
 
 async function loadSession() {
-  const response = await fetch("/api/session");
+  const response = await fetch("/api/session", { cache: "no-store" });
   if (response.status === 401) {
     window.location.href = "/login.html";
     return;
@@ -338,7 +339,7 @@ function appleSearch(params) {
 }
 
 async function loadStats() {
-  const response = await fetch("/api/stats");
+  const response = await fetch("/api/stats", { cache: "no-store" });
   const stats = await response.json();
   statsEl.innerHTML = `
     <span class="statsLine">${stats.albums.toLocaleString()} albums · ${stats.enriched.toLocaleString()} with source data · ${stats.tracks.toLocaleString()} tracks</span>
@@ -369,7 +370,7 @@ async function loadAlbums(options = {}) {
 
 function renderRows(albums) {
   const columns = state.columns.length ? state.columns : state.availableColumns.map((column) => column.key);
-  headEl.innerHTML = `<tr>${columns.map((key) => `<th>${escapeHtml(state.availableColumns.find((column) => column.key === key)?.label || key)}</th>`).join("")}</tr>`;
+  headEl.innerHTML = `<tr>${columns.map((key) => `<th class="col-${escapeAttribute(key)}">${escapeHtml(state.availableColumns.find((column) => column.key === key)?.label || key)}</th>`).join("")}</tr>`;
   rowsEl.innerHTML = albums
     .map((album) => {
       const services = album.matched_services ? album.matched_services.split(",").map((service) => service.trim()).filter(Boolean) : [];
@@ -381,17 +382,18 @@ function renderRows(albums) {
           ? ""
           : `Catalog format not found in API formats: ${album.api_formats.join(", ")}`;
       const cells = {
-        row_number: `<td>${escapeHtml(album.row_number)}</td>`,
-        artist: `<td>
+        row_number: `<td class="col-row_number">${escapeHtml(album.row_number)}</td>`,
+        cover: `<td class="col-cover">${renderRowCover(album)}</td>`,
+        artist: `<td class="col-artist">
             ${escapeHtml(album.artist)}
             <div class="subtle radioId">1190_ID: ${escapeHtml(album.catalog_number)}</div>
           </td>`,
-        album: `<td>
+        album: `<td class="col-album">
             <div>${escapeHtml(album.album_name)}</div>
             ${album.label ? `<div class="metaLine">${escapeHtml(album.label)}</div>` : ""}
           </td>`,
-        format: `<td><span class="${formatClass}" title="${escapeAttribute(formatTitle)}">${escapeHtml(album.format || album.media_format)}</span></td>`,
-        music_service: `<td><span class="${badgeClass}">${escapeHtml(serviceText)}</span></td>`,
+        format: `<td class="col-format"><span class="${formatClass}" title="${escapeAttribute(formatTitle)}">${escapeHtml(album.format || album.media_format)}</span></td>`,
+        music_service: `<td class="col-music_service"><span class="${badgeClass}">${escapeHtml(serviceText)}</span></td>`,
       };
       return `
         <tr data-id="${album.id}" class="${album.id === state.selectedId ? "selected" : ""}">
@@ -400,6 +402,13 @@ function renderRows(albums) {
       `;
     })
     .join("");
+}
+
+function renderRowCover(album) {
+  if (!album.cover_url) {
+    return `<span class="coverThumb coverPlaceholder" aria-label="No cover"></span>`;
+  }
+  return `<img class="coverThumb" src="${escapeAttribute(album.cover_url)}" alt="Cover for ${escapeAttribute(album.album_name)}" loading="lazy" />`;
 }
 
 function renderPager() {

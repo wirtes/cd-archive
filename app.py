@@ -75,6 +75,7 @@ SESSION_COOKIE = "cd_archive_session"
 LOGIN_PATH = "/login.html"
 MAIN_LIST_COLUMNS = {
     "row_number": "#",
+    "cover": "Cover",
     "artist": "Artist",
     "album": "Album",
     "format": "Format",
@@ -462,12 +463,40 @@ def normalize_list_columns(columns):
     return normalized or default_list_columns()
 
 
+def cover_column_index(columns):
+    try:
+        return columns.index("artist")
+    except ValueError:
+        return min(1, len(columns))
+
+
 def get_app_settings(conn):
     row = conn.execute("SELECT value FROM app_settings WHERE key = 'main_list_columns'").fetchone()
     try:
         columns = json.loads(row["value"]) if row else default_list_columns()
     except (TypeError, json.JSONDecodeError):
         columns = default_list_columns()
+    migrated = conn.execute("SELECT 1 FROM app_settings WHERE key = 'cover_column_added'").fetchone()
+    if not migrated:
+        columns = normalize_list_columns(columns)
+        if "cover" not in columns:
+            columns.insert(cover_column_index(columns), "cover")
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES ('cover_column_added', '1', ?)
+            ON CONFLICT(key) DO NOTHING
+            """,
+            (utc_now(),),
+        )
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES ('main_list_columns', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (json.dumps(columns, ensure_ascii=False), utc_now()),
+        )
     return {
         "available_columns": [{"key": key, "label": label} for key, label in MAIN_LIST_COLUMNS.items()],
         "main_list_columns": normalize_list_columns(columns),
@@ -785,6 +814,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1121,6 +1152,13 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     albums.id, albums.row_number, albums.catalog_number, albums.media_format, albums.artist,
                     albums.album_name, albums.label, albums.format, albums.country, albums.released,
                     albums.genre, albums.field_sources, albums.case_broken,
+                    (
+                        SELECT COALESCE(local_image_url, thumbnail_large, thumbnail_small, image_url)
+                        FROM cover_art
+                        WHERE cover_art.album_id = albums.id
+                        ORDER BY is_front DESC, approved DESC, id
+                        LIMIT 1
+                    ) AS cover_url,
                     (
                         SELECT GROUP_CONCAT(provider, ', ')
                         FROM (
@@ -1695,13 +1733,47 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 """
                 SELECT
                     COUNT(*) AS albums,
-                    (SELECT COUNT(DISTINCT album_id) FROM album_service_status) AS enriched,
-                    (SELECT COUNT(DISTINCT album_id) FROM album_service_status WHERE found = 1) AS matched,
+                    (
+                        SELECT COUNT(DISTINCT album_id)
+                        FROM external_metadata
+                        WHERE lookup_status = 'matched'
+                    ) AS enriched,
+                    (
+                        SELECT COUNT(DISTINCT album_id)
+                        FROM external_metadata
+                        WHERE lookup_status = 'matched'
+                    ) AS matched,
                     SUM(CASE WHEN albums.case_broken = 'Yes' THEN 1 ELSE 0 END) AS broken_cases,
                     (SELECT COUNT(*) FROM tracks) AS tracks,
-                    (SELECT COUNT(*) FROM album_genres) AS genres,
+                    (
+                        WITH tag_sources(album_id, tag) AS (
+                            SELECT album_id, name
+                            FROM album_genres
+                            UNION ALL
+                            SELECT external_metadata.album_id, json_each.value
+                            FROM external_metadata, json_each(external_metadata.genres)
+                            WHERE external_metadata.lookup_status = 'matched'
+                              AND json_valid(external_metadata.genres)
+                            UNION ALL
+                            SELECT external_metadata.album_id, json_each.value
+                            FROM external_metadata, json_each(external_metadata.styles)
+                            WHERE external_metadata.lookup_status = 'matched'
+                              AND json_valid(external_metadata.styles)
+                        ),
+                        normalized_tags AS (
+                            SELECT DISTINCT LOWER(TRIM(tag)) AS name
+                            FROM tag_sources
+                            WHERE TRIM(tag) != ''
+                        )
+                        SELECT COUNT(*)
+                        FROM normalized_tags
+                    ) AS genres,
                     (SELECT COUNT(*) FROM cover_art) AS covers,
-                    (SELECT COUNT(*) FROM album_service_status WHERE found = 1) AS service_matches
+                    (
+                        SELECT COUNT(*)
+                        FROM external_metadata
+                        WHERE lookup_status = 'matched'
+                    ) AS service_matches
                 FROM albums
                 """
             ).fetchone()
