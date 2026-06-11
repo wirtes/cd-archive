@@ -2336,18 +2336,24 @@ def enrich_album_from_discogs_url(
     return {"provider": provider, "artist": anchor_artist, "album_name": anchor_title, "services": [dict(row) for row in services]}
 
 
-def enrich_first_albums(conn: sqlite3.Connection, limit: int, offset: int, refresh_cache: bool) -> None:
-    rows = conn.execute(
-        """
-        SELECT id, row_number, artist, album_name
-        FROM albums
-        ORDER BY row_number
-        LIMIT ? OFFSET ?
-        """,
-        (limit, offset),
-    ).fetchall()
+def parse_catalog_id_list(values: list[str] | None) -> list[str]:
+    catalog_ids: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        for catalog_id in str(value).split(","):
+            catalog_id = catalog_id.strip()
+            if catalog_id and catalog_id not in seen:
+                catalog_ids.append(catalog_id)
+                seen.add(catalog_id)
+    return catalog_ids
+
+
+def enrich_album_rows(conn: sqlite3.Connection, rows: list[sqlite3.Row], refresh_cache: bool) -> None:
     for row in rows:
-        album_id, row_number, artist, album_name = row
+        album_id = row["id"]
+        row_number = row["row_number"]
+        artist = row["artist"]
+        album_name = row["album_name"]
         used_musicbrainz_cache = True
         try:
             release, raw, used_musicbrainz_cache = find_release(conn, artist or "", album_name or "", refresh_cache)
@@ -2389,6 +2395,43 @@ def enrich_first_albums(conn: sqlite3.Connection, limit: int, offset: int, refre
         conn.commit()
 
 
+def enrich_first_albums(conn: sqlite3.Connection, limit: int, offset: int, refresh_cache: bool) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, row_number, artist, album_name
+        FROM albums
+        ORDER BY row_number
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+    enrich_album_rows(conn, rows, refresh_cache)
+
+
+def refresh_catalog_ids(conn: sqlite3.Connection, catalog_ids: list[str]) -> None:
+    if not catalog_ids:
+        return
+
+    placeholders = ", ".join("?" for _ in catalog_ids)
+    order_cases = " ".join(f"WHEN ? THEN {index}" for index, _ in enumerate(catalog_ids))
+    rows = conn.execute(
+        f"""
+        SELECT id, row_number, artist, album_name, catalog_number
+        FROM albums
+        WHERE catalog_number IN ({placeholders})
+        ORDER BY CASE catalog_number {order_cases} ELSE {len(catalog_ids)} END, row_number
+        """,
+        [*catalog_ids, *catalog_ids],
+    ).fetchall()
+
+    found_ids = {row["catalog_number"] for row in rows}
+    missing_ids = [catalog_id for catalog_id in catalog_ids if catalog_id not in found_ids]
+    for catalog_id in missing_ids:
+        print(f"1190_ID {catalog_id}: not found")
+
+    enrich_album_rows(conn, rows, refresh_cache=True)
+
+
 def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Import the CD catalog CSV into SQLite and optionally enrich albums from local/API metadata providers.")
@@ -2397,11 +2440,18 @@ def main() -> None:
     parser.add_argument("--enrich", type=int, default=0, help="Number of catalog rows to enrich.")
     parser.add_argument("--offset", type=int, default=0, help="Number of catalog rows to skip before enriching.")
     parser.add_argument("--refresh-cache", action="store_true", help="Ignore cached API payloads and fetch fresh copies.")
+    parser.add_argument(
+        "--refresh-cache-ids",
+        nargs="+",
+        metavar="1190_ID",
+        help="Refresh cached API payloads and enrich only the albums with these 1190_ID/catalog_number values. Values may be space- or comma-separated.",
+    )
     args = parser.parse_args()
     if args.enrich < 0:
         parser.error("--enrich must be 0 or greater.")
     if args.offset < 0:
         parser.error("--offset must be 0 or greater.")
+    refresh_cache_ids = parse_catalog_id_list(args.refresh_cache_ids)
 
     db_exists = args.db.exists()
     args.db.parent.mkdir(parents=True, exist_ok=True)
@@ -2419,6 +2469,8 @@ def main() -> None:
             conn.commit()
         if args.enrich:
             enrich_first_albums(conn, args.enrich, args.offset, args.refresh_cache)
+        if refresh_cache_ids:
+            refresh_catalog_ids(conn, refresh_cache_ids)
     if db_exists:
         print(f"Updated existing database at {args.db}")
     else:
