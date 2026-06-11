@@ -1132,9 +1132,27 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         if hide_na:
             where.append("NOT (LOWER(TRIM(albums.artist)) = 'n/a' AND LOWER(TRIM(albums.album_name)) = 'n/a')")
         if enriched == "yes":
-            where.append("EXISTS (SELECT 1 FROM album_service_status WHERE album_service_status.album_id = albums.id)")
+            where.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM external_metadata
+                    WHERE external_metadata.album_id = albums.id
+                      AND external_metadata.lookup_status = 'matched'
+                )
+                """
+            )
         elif enriched == "no":
-            where.append("NOT EXISTS (SELECT 1 FROM album_service_status WHERE album_service_status.album_id = albums.id)")
+            where.append(
+                """
+                NOT EXISTS (
+                    SELECT 1
+                    FROM external_metadata
+                    WHERE external_metadata.album_id = albums.id
+                      AND external_metadata.lookup_status = 'matched'
+                )
+                """
+            )
 
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         with self.db() as conn:
@@ -1163,9 +1181,9 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                         SELECT GROUP_CONCAT(provider, ', ')
                         FROM (
                             SELECT provider
-                            FROM album_service_status
-                            WHERE album_service_status.album_id = albums.id
-                              AND album_service_status.found = 1
+                            FROM external_metadata
+                            WHERE external_metadata.album_id = albums.id
+                              AND external_metadata.lookup_status = 'matched'
                             ORDER BY CASE provider
                                 WHEN 'apple_itunes' THEN 1
                                 WHEN 'discogs' THEN 2
