@@ -44,6 +44,7 @@ def env_path(name: str, default: Path) -> Path:
 DB_PATH = env_path("DATABASE_PATH", ROOT / "data" / "cd_catalog.sqlite")
 COVER_DIR = env_path("COVER_DIR", ROOT / "web" / "covers")
 ARTIST_IMAGE_DIR = env_path("ARTIST_IMAGE_DIR", ROOT / "web" / "artist-images")
+SQLITE_BUSY_TIMEOUT_MS = 30000
 
 USER_AGENT = "cd-archive/1.0 (local catalog enrichment; https://musicbrainz.org/doc/MusicBrainz_API)"
 API_THROTTLE_SECONDS = {
@@ -82,6 +83,13 @@ SOURCE_COLUMNS = [
 
 def utc_now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
+
+
+def configure_sqlite_connection(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
 
 
 def load_dotenv(path: Path = ENV_PATH) -> None:
@@ -2397,8 +2405,9 @@ def main() -> None:
 
     db_exists = args.db.exists()
     args.db.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(args.db) as conn:
+    with sqlite3.connect(args.db, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000) as conn:
         conn.row_factory = sqlite3.Row
+        configure_sqlite_connection(conn)
         if db_exists:
             sanitize_cached_urls(conn)
             conn.commit()

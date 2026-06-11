@@ -50,6 +50,7 @@ from scripts.build_database import (
     apple_track_rows,
     apply_apple_track_explicitness,
     cached_json,
+    configure_sqlite_connection,
     create_schema,
     discogs_cover_url,
     discogs_is_compilation,
@@ -361,8 +362,9 @@ def password_hash(password):
 def ensure_database_schema():
     if not DB_PATH.exists():
         return
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     try:
+        configure_sqlite_connection(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -805,8 +807,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
     def db(self):
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("PRAGMA foreign_keys = ON")
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        configure_sqlite_connection(conn)
         conn.row_factory = sqlite3.Row
         return conn
 
