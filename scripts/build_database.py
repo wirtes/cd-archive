@@ -59,6 +59,7 @@ API_THROTTLE_SECONDS = {
     "lastfm": 1.1,
 }
 LAST_API_REQUEST_AT: dict[str, float] = {}
+FORCE_LOCKED_MATCHES = False
 LASTFM_PLACEHOLDER_IMAGE_ID = "2a96cbd8b46e442fc41c2b86b821562f"
 
 
@@ -251,6 +252,7 @@ def create_schema(conn: Any) -> None:
             title TEXT,
             url TEXT,
             lookup_error TEXT,
+            manual_match INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(album_id, provider),
             FOREIGN KEY(album_id) REFERENCES albums(id) ON DELETE CASCADE
         );
@@ -271,6 +273,7 @@ def create_schema(conn: Any) -> None:
             track_count INTEGER,
             cover_url TEXT,
             raw_json TEXT,
+            manual_match INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(album_id) REFERENCES albums(id) ON DELETE CASCADE,
             UNIQUE(album_id, provider)
         );
@@ -301,6 +304,21 @@ def ensure_track_preview_schema(conn: Any) -> None:
     }
     if track_columns and "preview_url" not in track_columns:
         conn.execute("ALTER TABLE tracks ADD COLUMN preview_url TEXT")
+
+
+def ensure_manual_match_schema(conn: Any) -> None:
+    for table in ("external_metadata", "album_service_status"):
+        rows = conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = ?
+            """,
+            (table,),
+        ).fetchall()
+        columns = {row["column_name"] for row in rows}
+        if columns and "manual_match" not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN manual_match INTEGER NOT NULL DEFAULT 0")
 
 
 def database_has_schema(conn: Any) -> bool:
@@ -744,13 +762,20 @@ def upsert_service_status(
     title: str | None = None,
     url: str | None = None,
     lookup_error: str | None = None,
+    manual_match: bool = False,
 ) -> None:
+    existing = conn.execute(
+        "SELECT manual_match FROM album_service_status WHERE album_id = ? AND provider = ?",
+        (album_id, provider),
+    ).fetchone()
+    if existing and existing["manual_match"] and not manual_match and not FORCE_LOCKED_MATCHES:
+        return
     conn.execute(
         """
         INSERT INTO album_service_status (
             album_id, provider, lookup_status, found, fetched_at,
-            external_id, title, url, lookup_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            external_id, title, url, lookup_error, manual_match
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(album_id, provider) DO UPDATE SET
             lookup_status = excluded.lookup_status,
             found = excluded.found,
@@ -758,7 +783,12 @@ def upsert_service_status(
             external_id = excluded.external_id,
             title = excluded.title,
             url = excluded.url,
-            lookup_error = excluded.lookup_error
+            lookup_error = excluded.lookup_error,
+            manual_match = CASE
+                WHEN excluded.manual_match = 1 THEN 1
+                WHEN album_service_status.manual_match = 1 AND ? = 0 THEN 1
+                ELSE excluded.manual_match
+            END
         """,
         (
             album_id,
@@ -770,6 +800,8 @@ def upsert_service_status(
             title,
             url,
             lookup_error,
+            1 if manual_match else 0,
+            1 if FORCE_LOCKED_MATCHES else 0,
         ),
     )
 
@@ -959,6 +991,48 @@ def upsert_musicbrainz_external_metadata(conn: Any, album_id: int, metadata: dic
             "raw_json": metadata.get("raw_json"),
         },
     )
+
+
+def provider_match_is_locked(conn: Any, album_id: int, provider: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT manual_match
+        FROM external_metadata
+        WHERE album_id = ? AND provider = ? AND lookup_status = 'matched'
+        """,
+        (album_id, provider),
+    ).fetchone()
+    return bool(row and row["manual_match"] and not FORCE_LOCKED_MATCHES)
+
+
+def set_provider_manual_match(conn: Any, album_id: int, provider: str, locked: bool = True) -> None:
+    value = 1 if locked else 0
+    conn.execute(
+        """
+        UPDATE external_metadata
+        SET manual_match = ?
+        WHERE album_id = ? AND provider = ? AND lookup_status = 'matched'
+        """,
+        (value, album_id, provider),
+    )
+    conn.execute(
+        """
+        UPDATE album_service_status
+        SET manual_match = ?
+        WHERE album_id = ? AND provider = ? AND lookup_status = 'matched'
+        """,
+        (value, album_id, provider),
+    )
+
+
+def run_with_locked_match_override(callback):
+    global FORCE_LOCKED_MATCHES
+    previous = FORCE_LOCKED_MATCHES
+    FORCE_LOCKED_MATCHES = True
+    try:
+        return callback()
+    finally:
+        FORCE_LOCKED_MATCHES = previous
 
 
 def discogs_master_fields(row: Row | None) -> dict[str, str | None]:
@@ -1297,6 +1371,15 @@ def fetch_lastfm_artist_page_image(artist: str) -> str | None:
 
 
 def upsert_external_metadata(conn: Any, album_id: int, metadata: dict) -> None:
+    provider = metadata.get("provider")
+    manual_match = bool(metadata.get("manual_match"))
+    if provider:
+        existing = conn.execute(
+            "SELECT manual_match FROM external_metadata WHERE album_id = ? AND provider = ?",
+            (album_id, provider),
+        ).fetchone()
+        if existing and existing["manual_match"] and not manual_match and not FORCE_LOCKED_MATCHES:
+            return
     columns = [
         "album_id",
         "provider",
@@ -1312,17 +1395,27 @@ def upsert_external_metadata(conn: Any, album_id: int, metadata: dict) -> None:
         "track_count",
         "cover_url",
         "raw_json",
+        "manual_match",
     ]
-    values = [album_id] + [metadata.get(column) for column in columns[1:]]
+    values = [album_id] + [
+        (1 if manual_match else 0) if column == "manual_match" else metadata.get(column)
+        for column in columns[1:]
+    ]
     placeholders = ", ".join("?" for _ in columns)
-    updates = ", ".join(f"{column}=excluded.{column}" for column in columns[1:])
+    updates = ", ".join(f"{column}=excluded.{column}" for column in columns[1:-1])
+    updates = f"""{updates},
+            manual_match = CASE
+                WHEN excluded.manual_match = 1 THEN 1
+                WHEN external_metadata.manual_match = 1 AND ? = 0 THEN 1
+                ELSE excluded.manual_match
+            END"""
     conn.execute(
         f"""
         INSERT INTO external_metadata ({", ".join(columns)})
         VALUES ({placeholders})
         ON CONFLICT(album_id, provider) DO UPDATE SET {updates}
         """,
-        values,
+        values + [1 if FORCE_LOCKED_MATCHES else 0],
     )
 
 
@@ -1428,6 +1521,10 @@ def fetch_discogs(
     refresh_cache: bool,
     prefer_discogs_tracks: bool = False,
 ) -> None:
+    if provider_match_is_locked(conn, album_id, "discogs"):
+        if prefer_discogs_tracks:
+            replace_tracks_from_cached_discogs_match(conn, album_id)
+        return
     existing = conn.execute(
         "SELECT lookup_status FROM external_metadata WHERE album_id = ? AND provider = ?",
         (album_id, "discogs"),
@@ -1688,6 +1785,8 @@ def discogs_cover_url(payload: dict, selected: dict) -> str | None:
 
 
 def fetch_lastfm(conn: Any, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> None:
+    if provider_match_is_locked(conn, album_id, "lastfm"):
+        return
     existing = conn.execute(
         "SELECT lookup_status FROM external_metadata WHERE album_id = ? AND provider = ?",
         (album_id, "lastfm"),
@@ -2065,6 +2164,8 @@ def upsert_apple_album(
 
 
 def fetch_apple_itunes(conn: Any, album_id: int, artist: str, album_name: str, refresh_cache: bool) -> None:
+    if provider_match_is_locked(conn, album_id, "apple_itunes"):
+        return
     existing = conn.execute(
         "SELECT lookup_status, external_id, title, raw_json FROM external_metadata WHERE album_id = ? AND provider = ?",
         (album_id, "apple_itunes"),
@@ -2203,6 +2304,8 @@ def enrich_musicbrainz_release_id(conn: Any, album_id: int, release_id: str, ref
         refresh_cache,
     )
     release = detail_payload or {}
+    if error or not release:
+        raise ValueError(error or "MusicBrainz release was not found.")
     metadata = release_to_metadata(release if release else None, {"detail": detail_payload}, "matched" if release else "error", error)
     upsert_metadata(conn, album_id, metadata)
     upsert_service_status(
@@ -2339,29 +2442,39 @@ def enrich_album_from_service_url(conn: Any, album_id: int, service_url: str, re
     anchor_title = album["album_name"]
 
     if provider == "musicbrainz":
-        anchor_artist, anchor_title = enrich_musicbrainz_release_id(conn, album_id, data["release_id"], refresh_cache)
+        anchor_artist, anchor_title = run_with_locked_match_override(
+            lambda: enrich_musicbrainz_release_id(conn, album_id, data["release_id"], refresh_cache)
+        )
         if anchor_artist and anchor_title:
             fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache, prefer_discogs_tracks=True)
             fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
             fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
     elif provider == "discogs":
         if data.get("master_id"):
-            anchor_artist, anchor_title = fetch_discogs_master_id(conn, album_id, data["master_id"], refresh_cache)
+            anchor_artist, anchor_title = run_with_locked_match_override(
+                lambda: fetch_discogs_master_id(conn, album_id, data["master_id"], refresh_cache)
+            )
         else:
-            anchor_artist, anchor_title = fetch_discogs_release_id(conn, album_id, data["release_id"], refresh_cache)
+            anchor_artist, anchor_title = run_with_locked_match_override(
+                lambda: fetch_discogs_release_id(conn, album_id, data["release_id"], refresh_cache)
+            )
         if anchor_artist and anchor_title:
             enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
             replace_tracks_from_cached_discogs_match(conn, album_id)
             fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
             fetch_lastfm(conn, album_id, anchor_artist, anchor_title, refresh_cache)
     elif provider == "lastfm":
-        anchor_artist, anchor_title = fetch_lastfm_album_info(conn, album_id, data["artist"], data["album_name"], refresh_cache)
+        anchor_artist, anchor_title = run_with_locked_match_override(
+            lambda: fetch_lastfm_album_info(conn, album_id, data["artist"], data["album_name"], refresh_cache)
+        )
         if anchor_artist and anchor_title:
             enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
             fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache, prefer_discogs_tracks=True)
             fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
     elif provider == "apple_itunes":
-        anchor_artist, anchor_title = fetch_apple_collection_id(conn, album_id, data["collection_id"], refresh_cache)
+        anchor_artist, anchor_title = run_with_locked_match_override(
+            lambda: fetch_apple_collection_id(conn, album_id, data["collection_id"], refresh_cache)
+        )
         if anchor_artist and anchor_title:
             enrich_musicbrainz_by_search(conn, album_id, anchor_artist, anchor_title, refresh_cache)
             fetch_discogs(conn, album_id, anchor_artist, anchor_title, refresh_cache, prefer_discogs_tracks=True)
@@ -2372,6 +2485,7 @@ def enrich_album_from_service_url(conn: Any, album_id: int, service_url: str, re
     replace_tracks_from_cached_discogs_match(conn, album_id)
     if anchor_artist and anchor_title:
         fetch_apple_itunes(conn, album_id, anchor_artist, anchor_title, refresh_cache)
+    set_provider_manual_match(conn, album_id, provider, True)
     update_master_catalog_fields(conn, album_id)
     services = conn.execute(
         """
@@ -2625,6 +2739,7 @@ def scan_itunes_preview_links(conn: Any, limit: int, offset: int, refresh_cache:
 
 
 def main() -> None:
+    global FORCE_LOCKED_MATCHES
     load_dotenv()
     parser = argparse.ArgumentParser(description="Import the CD catalog CSV into Postgres and optionally enrich albums from local/API metadata providers.")
     parser.add_argument("--csv", type=Path, default=CSV_PATH)
@@ -2634,6 +2749,7 @@ def main() -> None:
     parser.add_argument("--offset", type=int, default=0, help="Number of catalog rows to skip before enriching.")
     parser.add_argument("--scan-itunes-previews", type=int, default=0, metavar="N", help="Scan N catalog rows for cached iTunes track preview links, starting after --offset rows.")
     parser.add_argument("--refresh-cache", action="store_true", help="Ignore cached API payloads and fetch fresh copies.")
+    parser.add_argument("--force-locked-matches", action="store_true", help="Allow enrichment to overwrite manually locked music-service matches.")
     parser.add_argument(
         "--refresh-cache-ids",
         nargs="+",
@@ -2641,6 +2757,7 @@ def main() -> None:
         help="Refresh cached API payloads and enrich only the albums with these 1190_ID/catalog_number values. Values may be space- or comma-separated.",
     )
     args = parser.parse_args()
+    FORCE_LOCKED_MATCHES = args.force_locked_matches
     if args.enrich < 0:
         parser.error("--enrich must be 0 or greater.")
     if args.offset < 0:
@@ -2658,12 +2775,14 @@ def main() -> None:
         db_exists = database_has_schema(conn)
         if db_exists:
             ensure_track_preview_schema(conn)
+            ensure_manual_match_schema(conn)
             sanitize_cached_urls(conn)
             conn.commit()
         else:
             rows = read_catalog_rows(args.csv)
             create_schema(conn)
             ensure_track_preview_schema(conn)
+            ensure_manual_match_schema(conn)
             sanitize_cached_urls(conn)
             import_catalog(conn, rows)
             imported_rows = len(rows)

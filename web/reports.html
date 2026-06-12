@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reports · Radio 1190 Catalog</title>
+    <link rel="icon" href="/images/favicon.ico" />
+    <link rel="stylesheet" href="/login.css" />
+    <link rel="stylesheet" href="/admin.css?v=reports-1" />
+  </head>
+  <body class="adminPage">
+    <header class="topbar pageHeader">
+      <div class="brandBlock">
+        <a class="logoLink" href="/" aria-label="Radio 1190 Catalog home">
+          <img class="siteLogo" src="/images/1190-logo-reversed-300x180.png" alt="Radio 1190" />
+        </a>
+        <div>
+          <h1><a class="homeLink" href="/">Reports</a></h1>
+          <p>Catalog and music-service matching totals.</p>
+        </div>
+      </div>
+      <div class="userControls">
+        <span id="sessionUser" class="sessionUser"></span>
+        <div class="accountMenuWrap">
+          <button id="accountMenuButton" class="accountMenuButton" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">
+            <span class="hamburgerIcon" aria-hidden="true"><span></span><span></span><span></span></span>
+          </button>
+          <div id="accountMenu" class="accountMenu" role="menu" hidden>
+            <a href="/" role="menuitem">Catalog</a>
+            <a href="/add.html" role="menuitem">Add</a>
+            <a id="adminLink" href="/admin.html" role="menuitem" hidden>Admin</a>
+            <button id="logoutButton" type="button" role="menuitem">Logout</button>
+          </div>
+        </div>
+      </div>
+    </header>
+    <main class="adminShell reportsShell">
+      <section class="reportsPanel" aria-live="polite">
+        <h2>Reports</h2>
+        <dl id="reportsList" class="reportsList">
+          <div>
+            <dt>Loading</dt>
+            <dd>...</dd>
+          </div>
+        </dl>
+      </section>
+      <a class="backLink" href="/">Back to catalog</a>
+    </main>
+    <script src="/reports.js?v=reports-1"></script>
+  </body>
+</html>

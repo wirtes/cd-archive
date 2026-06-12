@@ -62,6 +62,7 @@ from scripts.build_database import (
     fetch_apple_collection_id,
     first_joined,
     flatten_discogs_tracks,
+    ensure_manual_match_schema,
     ensure_track_preview_schema,
     is_various_artist,
     load_dotenv,
@@ -381,6 +382,7 @@ def ensure_database_schema():
     try:
         configure_database_connection(conn)
         ensure_track_preview_schema(conn)
+        ensure_manual_match_schema(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -582,7 +584,8 @@ def get_album_bundle(conn, album_id):
     external = conn.execute(
         """
         SELECT provider, lookup_status, lookup_error, fetched_at, external_id,
-               url, title, artist, genres, styles, track_count, cover_url, raw_json
+               url, title, artist, genres, styles, track_count, cover_url, raw_json,
+               manual_match
         FROM external_metadata
         WHERE album_id = ?
         ORDER BY CASE provider
@@ -598,7 +601,7 @@ def get_album_bundle(conn, album_id):
     services = conn.execute(
         """
         SELECT provider, lookup_status, found, fetched_at, external_id,
-               title, url, lookup_error
+               title, url, lookup_error, manual_match
         FROM album_service_status
         WHERE album_id = ?
         ORDER BY CASE provider
@@ -639,8 +642,11 @@ def get_album_bundle(conn, album_id):
 
     artist_info = find_artist_info(conn, album, external_rows)
 
+    album_row = dict(album)
+    album_row["manual_match"] = any(row.get("manual_match") for row in external_rows if row.get("lookup_status") == "matched")
+
     return {
-        "album": dict(album),
+        "album": album_row,
         "artist": dict(artist_info) if artist_info else None,
         "musicbrainz": dict(metadata) if metadata else None,
         "tracks": [dict(row) for row in tracks],
@@ -790,6 +796,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             self.handle_album_detail(parsed)
         elif parsed.path == "/api/stats":
             self.handle_stats()
+        elif parsed.path == "/api/reports":
+            self.handle_reports()
         elif parsed.path == "/api/tags":
             self.handle_tags()
         elif parsed.path == "/api/session":
@@ -1529,6 +1537,25 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             ),
         )
 
+    def update_album_manual_match(self, conn, album_id, locked):
+        value = 1 if locked else 0
+        conn.execute(
+            """
+            UPDATE external_metadata
+            SET manual_match = ?
+            WHERE album_id = ? AND lookup_status = 'matched'
+            """,
+            (value, album_id),
+        )
+        conn.execute(
+            """
+            UPDATE album_service_status
+            SET manual_match = ?
+            WHERE album_id = ? AND lookup_status = 'matched'
+            """,
+            (value, album_id),
+        )
+
     def save_uploaded_cover(self, conn, album_id, cover_data_url):
         if not cover_data_url:
             return
@@ -1694,6 +1721,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 if "tracks" in payload:
                     self.replace_album_tracks(conn, album_id, payload.get("tracks"))
                     self.apply_cached_apple_explicitness(conn, album_id, replace_existing=bool(service_url))
+                if "manual_match" in form:
+                    self.update_album_manual_match(conn, album_id, bool(form.get("manual_match")))
                 self.save_uploaded_cover(conn, album_id, payload.get("cover_data_url"))
                 conn.commit()
                 bundle = get_album_bundle(conn, album_id)
@@ -1843,6 +1872,71 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                         FROM external_metadata
                         WHERE lookup_status = 'matched'
                     ) AS service_matches
+                FROM albums
+                """
+            ).fetchone()
+        self.send_json(dict(row))
+
+    def handle_reports(self):
+        with self.db() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_records,
+                    (
+                        SELECT COUNT(DISTINCT album_id)
+                        FROM external_metadata
+                        WHERE lookup_status = 'matched'
+                    ) AS matched_records,
+                    (
+                        SELECT COUNT(DISTINCT album_id)
+                        FROM external_metadata
+                        WHERE lookup_status = 'matched' AND provider = 'apple_itunes'
+                    ) AS apple_itunes_matches,
+                    (
+                        SELECT COUNT(DISTINCT album_id)
+                        FROM external_metadata
+                        WHERE lookup_status = 'matched' AND provider = 'discogs'
+                    ) AS discogs_matches,
+                    (
+                        SELECT COUNT(DISTINCT album_id)
+                        FROM external_metadata
+                        WHERE lookup_status = 'matched' AND provider = 'lastfm'
+                    ) AS lastfm_matches,
+                    (
+                        SELECT COUNT(DISTINCT album_id)
+                        FROM external_metadata
+                        WHERE lookup_status = 'matched' AND provider = 'musicbrainz'
+                    ) AS musicbrainz_matches,
+                    (
+                        SELECT COUNT(DISTINCT album_id)
+                        FROM external_metadata
+                        WHERE manual_match = 1
+                    ) AS manually_updated_records,
+                    (SELECT COUNT(*) FROM tracks) AS tracks,
+                    (
+                        WITH tag_sources(album_id, tag) AS (
+                            SELECT album_id, name
+                            FROM album_genres
+                            UNION ALL
+                            SELECT external_metadata.album_id, genre.value
+                            FROM external_metadata
+                            CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(NULLIF(external_metadata.genres, '')::jsonb, '[]'::jsonb)) AS genre(value)
+                            WHERE external_metadata.lookup_status = 'matched'
+                            UNION ALL
+                            SELECT external_metadata.album_id, style.value
+                            FROM external_metadata
+                            CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(NULLIF(external_metadata.styles, '')::jsonb, '[]'::jsonb)) AS style(value)
+                            WHERE external_metadata.lookup_status = 'matched'
+                        ),
+                        normalized_tags AS (
+                            SELECT DISTINCT LOWER(TRIM(tag)) AS name
+                            FROM tag_sources
+                            WHERE TRIM(tag) != ''
+                        )
+                        SELECT COUNT(*)
+                        FROM normalized_tags
+                    ) AS unique_genre_tags
                 FROM albums
                 """
             ).fetchone()

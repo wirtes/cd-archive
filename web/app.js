@@ -5,6 +5,7 @@ const state = {
   label: "",
   hideNa: true,
   searchTracks: false,
+  showUnmatched: false,
   limit: 50,
   offset: 0,
   total: 0,
@@ -40,6 +41,7 @@ const searchForm = document.querySelector("#searchForm");
 const searchInput = document.querySelector("#searchInput");
 const hideNaInput = document.querySelector("#hideNaInput");
 const searchTracksInput = document.querySelector("#searchTracksInput");
+const showUnmatchedInput = document.querySelector("#showUnmatchedInput");
 const adminLink = document.querySelector("#adminLink");
 const sessionUser = document.querySelector("#sessionUser");
 const accountMenuButton = document.querySelector("#accountMenuButton");
@@ -340,8 +342,8 @@ async function loadStats() {
   const response = await fetch("/api/stats", { cache: "no-store" });
   const stats = await response.json();
   statsEl.innerHTML = `
-    <span class="statsLine">${stats.albums.toLocaleString()} albums · ${stats.enriched.toLocaleString()} with source data · ${stats.tracks.toLocaleString()} tracks</span>
-    <span class="statsLine">${stats.matched.toLocaleString()} matched albums · <button class="statsLink" type="button" id="tagCloudButton">${stats.genres.toLocaleString()} genres/tags</button></span>
+    <span class="statsLine">${stats.albums.toLocaleString()} albums · ${stats.tracks.toLocaleString()} tracks</span>
+    <span class="statsLine">${stats.matched.toLocaleString()} music service matches · <button class="statsLink" type="button" id="tagCloudButton">${stats.genres.toLocaleString()} genres/tags</button></span>
   `;
 }
 
@@ -353,6 +355,7 @@ async function loadAlbums(options = {}) {
     label: state.label,
     hide_na: state.hideNa ? "1" : "0",
     search_tracks: state.searchTracks ? "1" : "0",
+    enriched: state.showUnmatched ? "no" : "all",
     limit: state.limit,
     offset: state.offset,
   });
@@ -534,7 +537,10 @@ function renderProviderBlocks(external) {
             <section class="provider">
               <div class="providerHead">
                 <strong>${escapeHtml(sourceLabel(provider.provider))}</strong>
-                <span class="${statusClass}">${escapeHtml(provider.lookup_status)}</span>
+                <span class="providerStatus">
+                  ${provider.manual_match ? `<span class="manualMatchBadge" title="Protected from batch enrichment">locked</span>` : ""}
+                  <span class="${statusClass}">${escapeHtml(provider.lookup_status)}</span>
+                </span>
               </div>
               ${
                 provider.lookup_status === "matched"
@@ -677,6 +683,10 @@ function showAlbumForm(mode = "add", payload = null) {
                 <input id="edit-service-url" name="music_service_url" type="url" placeholder="MusicBrainz, Discogs, Apple Music, or Last.fm album URL" />
                 <button type="button" data-preview-match-url>Get Album Info</button>
               </div>
+            </label>
+            <label class="formField checkboxField" for="edit-manual-match">
+              <span>Lock Music Service Matches</span>
+              <input id="edit-manual-match" name="manual_match" type="checkbox" ${album.manual_match ? "checked" : ""} />
             </label>`
           : `<label class="formField wide" for="add-service-url">
               <span>Load from Music Service URL</span>
@@ -722,6 +732,9 @@ function addFormValues(form) {
     } else {
       values[field.name] = form.elements[field.name]?.value?.trim() || "";
     }
+  }
+  if (form.elements.manual_match) {
+    values.manual_match = Boolean(form.elements.manual_match.checked);
   }
   return values;
 }
@@ -1012,6 +1025,12 @@ searchTracksInput.addEventListener("change", () => {
   loadAlbums();
 });
 
+showUnmatchedInput.addEventListener("change", () => {
+  state.showUnmatched = showUnmatchedInput.checked;
+  state.offset = 0;
+  loadAlbums();
+});
+
 rowsEl.addEventListener("click", (event) => {
   const artistButton = event.target.closest("[data-artist]");
   if (artistButton) {
@@ -1236,6 +1255,7 @@ async function loadServiceUrlIntoAddForm(form) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Unable to load music service data.");
     populateAddFormFromBundle(form, payload);
+    if (form.elements.manual_match) form.elements.manual_match.checked = true;
     message.textContent = "Loaded album info. Review the fields before saving.";
   } catch (error) {
     message.textContent = error.message;
@@ -1267,6 +1287,7 @@ async function previewMatchIntoEditForm(form) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Unable to get album info.");
     populateAddFormFromBundle(form, payload);
+    if (form.elements.manual_match) form.elements.manual_match.checked = true;
     message.textContent = "Loaded album info. Review the fields, then save to update the database.";
   } catch (error) {
     message.textContent = error.message;
@@ -1413,6 +1434,7 @@ async function init() {
   await loadStats();
   hideNaInput.checked = state.hideNa;
   searchTracksInput.checked = state.searchTracks;
+  showUnmatchedInput.checked = state.showUnmatched;
   loadAlbums();
 }
 

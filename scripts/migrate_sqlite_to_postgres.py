@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from db import connect as connect_database, database_url
-from scripts.build_database import create_schema, database_has_schema
+from scripts.build_database import create_schema, database_has_schema, ensure_manual_match_schema
 
 
 DEFAULT_SQLITE_PATH = ROOT / "data" / "cd_catalog.sqlite"
@@ -190,6 +190,8 @@ def main() -> None:
             if args.recreate or not database_has_schema(pg_conn):
                 create_schema(pg_conn)
                 pg_conn.commit()
+            else:
+                ensure_manual_match_schema(pg_conn)
             ensure_app_tables(pg_conn)
             if not args.append:
                 clear_postgres_tables(pg_conn)

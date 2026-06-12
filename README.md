@@ -185,6 +185,7 @@ Options:
 | `--offset N` | `0` | Skip `N` catalog rows before `--enrich` begins. |
 | `--scan-itunes-previews N` | `0` | Scan `N` catalog rows for iTunes track preview links, starting after `--offset` rows. |
 | `--refresh-cache` | off | Ignore cached API JSON and fetch fresh copies. |
+| `--force-locked-matches` | off | Allow enrichment to overwrite manually locked music-service matches. |
 | `--refresh-cache-ids ID...` | unset | Refresh cached API JSON and enrich only albums whose `1190_ID`/`catalog_number` matches the supplied space- or comma-separated IDs. |
 
 Notes:
@@ -197,6 +198,7 @@ Notes:
 - Last.fm album and artist enrichment is skipped when `LASTFM_API_KEY` is not set.
 - The script creates and imports the catalog only when the Postgres schema does not exist. Existing databases are preserved and updated in place.
 - API payloads are cached in Postgres and reused on later enrichment calls unless `--refresh-cache` or `--refresh-cache-ids` is supplied.
+- Service URL matches are marked as manual/locked. Batch enrichment preserves locked provider rows, including when `--refresh-cache` is used, unless `--force-locked-matches` is supplied.
 - Uncached provider requests are throttled per service. Cached responses return immediately.
 - Cover images are saved under `COVER_DIR`, defaulting to `web/covers/`.
 - Artist images are saved under `ARTIST_IMAGE_DIR`, defaulting to `web/artist-images/`.
@@ -424,6 +426,8 @@ Manual matches prefer Discogs tracklists when a Discogs release or master record
 
 Use the header `Add` button to add a new album manually. The Add form can load album data from Apple Music/iTunes, Discogs release/master, Last.fm, or MusicBrainz release URLs. Existing albums can use the Edit form's `Match to this Album` field with the same music-service URLs.
 
+Music-service URL matches are marked as locked manual matches so later batch enrichment will not unmatch those provider rows. The Edit form includes `Lock Music Service Matches`; uncheck it to let future enrichment replace currently matched service rows, or leave it checked to preserve manual matches. To override locked rows from the enrichment script, pass `--force-locked-matches`.
+
 Album detail views include `Edit` and `Delete` buttons. Edit updates the catalog fields stored on `albums`; Delete removes the album and its dependent cached metadata through Postgres foreign-key cascades.
 
 The Add/Edit form includes:
@@ -573,6 +577,7 @@ erDiagram
         text title
         text url
         text lookup_error
+        integer manual_match
     }
 
     EXTERNAL_METADATA {
@@ -591,6 +596,7 @@ erDiagram
         integer track_count
         text cover_url
         text raw_json
+        integer manual_match
     }
 
     API_CACHE {
@@ -661,6 +667,7 @@ flowchart LR
 | `/api/users` | `GET`/`POST` | Admin-only user listing and creation. |
 | `/api/albums/<id>/music-service-url` | `POST` | Submit a MusicBrainz, Discogs, Apple Music/iTunes, or Last.fm album URL for an album. |
 | `/api/stats` | `GET` | Return high-level catalog stats. |
+| `/api/reports` | `GET` | Return report totals for records, music-service matches, manual updates, tracks, and genre tags. |
 | `/api/tags` | `GET` | Return tag-cloud data from cached Apple iTunes, Discogs, Last.fm, and MusicBrainz genre/tag/style records. |
 
 ## Notes

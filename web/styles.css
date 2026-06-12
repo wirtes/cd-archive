@@ -784,6 +784,19 @@ tbody tr.selected:hover {
   font-weight: 700;
 }
 
+.providerStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.manualMatchBadge {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #eef6ff;
+  color: #1d4f91;
+}
+
 .providerHead .ok {
   color: var(--accent-strong);
 }

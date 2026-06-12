@@ -165,6 +165,64 @@
   align-items: start;
 }
 
+.reportsShell {
+  width: min(760px, 100%);
+}
+
+.reportsPanel {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.1);
+}
+
+.reportsPanel h2 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+.reportsList {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.reportsList div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px;
+  align-items: baseline;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.reportsList div:first-child {
+  border-top: 0;
+}
+
+.reportsList .subReport {
+  padding-left: 22px;
+}
+
+.reportsList dt {
+  color: var(--ink);
+  font-weight: 760;
+}
+
+.reportsList .subReport dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.reportsList dd {
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: 19px;
+  font-weight: 800;
+  text-align: right;
+}
+
 .adminForm {
   width: 100%;
 }
