@@ -73,7 +73,7 @@ The `scripts/` directory contains the maintenance commands for importing data an
 
 ### `scripts/build_database.py`
 
-Imports `data/CD Catalog.csv`, creates or rebuilds `data/cd_catalog.sqlite`, imports the catalog rows, and optionally enriches albums from MusicBrainz, Discogs, Apple iTunes, and Last.fm.
+Imports `data/CD Catalog.csv` when the database does not exist, creates `data/cd_catalog.sqlite`, and optionally enriches albums from MusicBrainz, Discogs, Apple iTunes, and Last.fm. Existing databases are opened in place so enrichment can be resumed without rebuilding the schema.
 
 Import the CSV only:
 
@@ -99,14 +99,36 @@ Force fresh API calls instead of using cached payloads:
 python3 scripts/build_database.py --enrich 50 --refresh-cache
 ```
 
+Resume a batch after skipping earlier catalog rows:
+
+```sh
+python3 scripts/build_database.py --enrich 50 --offset 40
+```
+
+Pre-scan a batch for iTunes track preview links:
+
+```sh
+python3 scripts/build_database.py --scan-itunes-previews 50 --offset 40
+```
+
+Refresh cached API payloads for specific `1190_ID` values only:
+
+```sh
+python3 scripts/build_database.py --refresh-cache-ids ABC123 DEF456
+python3 scripts/build_database.py --refresh-cache-ids ABC123,DEF456,GHI789
+```
+
 Options:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `--csv` | `data/CD Catalog.csv` | Spreadsheet export to import. |
-| `--db` | `data/cd_catalog.sqlite` | SQLite database to create or rebuild. |
-| `--enrich N` | `0` | Enrich the first `N` catalog rows after importing. |
+| `--csv` | `data/CD Catalog.csv` | Spreadsheet export to import when the database does not already exist. |
+| `--db` | `data/cd_catalog.sqlite` | SQLite database to create or update. |
+| `--enrich N` | `0` | Enrich `N` catalog rows. |
+| `--offset N` | `0` | Skip `N` catalog rows before `--enrich` begins. |
+| `--scan-itunes-previews N` | `0` | Scan `N` catalog rows for iTunes track preview links, starting after `--offset` rows. |
 | `--refresh-cache` | off | Ignore cached API JSON and fetch fresh copies. |
+| `--refresh-cache-ids ID...` | unset | Refresh cached API JSON and enrich only albums whose `1190_ID`/`catalog_number` matches the supplied space- or comma-separated IDs. |
 
 Notes:
 
@@ -116,7 +138,8 @@ Notes:
 - Discogs enrichment is skipped when `DISCOGS_TOKEN` is not set.
 - Apple iTunes enrichment does not require an API key.
 - Last.fm album and artist enrichment is skipped when `LASTFM_API_KEY` is not set.
-- The script rebuilds the main catalog schema each time it runs. API payloads are cached in SQLite during a run and reused on later enrichment calls unless `--refresh-cache` is supplied.
+- The script creates and imports the catalog only when the database file does not exist. Existing databases are preserved and updated in place.
+- API payloads are cached in SQLite and reused on later enrichment calls unless `--refresh-cache` or `--refresh-cache-ids` is supplied.
 - Uncached provider requests are throttled per service. Cached responses return immediately.
 - Cover images are saved under `COVER_DIR`, defaulting to `web/covers/`.
 - Artist images are saved under `ARTIST_IMAGE_DIR`, defaulting to `web/artist-images/`.
@@ -347,7 +370,7 @@ The Add/Edit form includes:
 - Compilation track artists are clickable when a track is displayed as `Artist - Song`.
 - Album covers and artist images open in a lightbox.
 - Artist images and Last.fm bios appear at the bottom of the sidebar when available; long bios are truncated with a full-bio link.
-- Apple iTunes metadata is cached server-side. The older client-side preview playback code is still present but currently disabled.
+- Apple iTunes metadata is cached server-side. When tracks have stored iTunes preview links, album details show a play icon beside those tracks.
 
 ## Database ERD
 
@@ -561,7 +584,7 @@ flowchart LR
 
 ## Notes
 
-- `api_cache` stores raw JSON responses keyed by provider and request, so routine rebuilds avoid unnecessary API calls.
+- `api_cache` stores raw JSON responses keyed by provider and request, so routine enrichment runs avoid unnecessary API calls.
 - `external_metadata` stores normalized provider records for Apple iTunes, Discogs, Last.fm, and MusicBrainz.
 - `musicbrainz_metadata` is a service-specific detail/cache table for MusicBrainz release fields. It does not make MusicBrainz the master service model; MusicBrainz also has a normalized row in `external_metadata` like Apple iTunes, Discogs, and Last.fm.
 - `tracks` prefer Apple iTunes when a matching Apple album is found, can fall back to Discogs or MusicBrainz, can be edited in the Add/Edit form, and are marked with `explicit` from Apple iTunes. Discogs compilation tracks are stored as `Artist - Song` so the UI can make the artist portion searchable.

@@ -61,6 +61,7 @@ from scripts.build_database import (
     fetch_apple_collection_id,
     first_joined,
     flatten_discogs_tracks,
+    ensure_track_preview_schema,
     is_various_artist,
     load_dotenv,
     select_apple_album,
@@ -365,6 +366,7 @@ def ensure_database_schema():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     try:
         configure_sqlite_connection(conn)
+        ensure_track_preview_schema(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -528,7 +530,7 @@ def get_album_bundle(conn, album_id):
     tracks = conn.execute(
         """
         SELECT medium_position, medium_title, medium_format, track_position,
-               track_number, title, length_ms, explicit, recording_id
+               track_number, title, length_ms, explicit, preview_url, recording_id
         FROM tracks
         WHERE album_id = ?
         ORDER BY medium_position, track_position, id
@@ -1559,8 +1561,8 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             """
             INSERT INTO tracks (
                 album_id, medium_position, medium_title, medium_format, track_position,
-                track_number, title, length_ms, explicit, recording_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                track_number, title, length_ms, explicit, preview_url, recording_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -1573,6 +1575,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     row["title"],
                     row["length_ms"],
                     row["explicit"],
+                    None,
                     row["recording_id"],
                 )
                 for row in rows

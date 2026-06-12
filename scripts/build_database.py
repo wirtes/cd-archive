@@ -208,6 +208,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
             title TEXT,
             length_ms INTEGER,
             explicit INTEGER NOT NULL DEFAULT 0,
+            preview_url TEXT,
             recording_id TEXT,
             FOREIGN KEY(album_id) REFERENCES albums(id) ON DELETE CASCADE
         );
@@ -285,6 +286,12 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX idx_external_album ON external_metadata(album_id);
         """
     )
+
+
+def ensure_track_preview_schema(conn: sqlite3.Connection) -> None:
+    track_columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)").fetchall()}
+    if track_columns and "preview_url" not in track_columns:
+        conn.execute("ALTER TABLE tracks ADD COLUMN preview_url TEXT")
 
 
 def read_catalog_rows(csv_path: Path) -> list[dict[str, str]]:
@@ -728,6 +735,7 @@ def replace_tracks(conn: sqlite3.Connection, album_id: int, release: dict | None
                     track.get("title") or recording.get("title"),
                     track.get("length") or recording.get("length"),
                     0,
+                    None,
                     recording.get("id"),
                 )
             )
@@ -735,8 +743,8 @@ def replace_tracks(conn: sqlite3.Connection, album_id: int, release: dict | None
         """
         INSERT INTO tracks (
             album_id, medium_position, medium_title, medium_format,
-            track_position, track_number, title, length_ms, explicit, recording_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            track_position, track_number, title, length_ms, explicit, preview_url, recording_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -1554,6 +1562,7 @@ def insert_discogs_tracks(conn: sqlite3.Connection, album_id: int, payload: dict
                 display_title,
                 duration_to_ms(track.get("duration")),
                 0,
+                None,
                 f"discogs:{payload.get('id')}:{track.get('position') or index}",
             )
         )
@@ -1565,8 +1574,8 @@ def insert_discogs_tracks(conn: sqlite3.Connection, album_id: int, payload: dict
         """
         INSERT INTO tracks (
             album_id, medium_position, medium_title, medium_format, track_position,
-            track_number, title, length_ms, explicit, recording_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            track_number, title, length_ms, explicit, preview_url, recording_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -1791,12 +1800,40 @@ def apple_track_is_explicit(track: dict) -> bool:
     )
 
 
+def apple_track_preview_url(track: dict) -> str | None:
+    preview_url = (track.get("previewUrl") or "").strip()
+    return preview_url or None
+
+
 def track_match_keys(title: str | None) -> set[str]:
     value = title or ""
     keys = {normalize_match_text(value)}
     if " - " in value:
         keys.add(normalize_match_text(value.split(" - ", 1)[1]))
     return {key for key in keys if key}
+
+
+def update_apple_track_previews(conn: sqlite3.Connection, album_id: int, apple_tracks: list[dict]) -> int:
+    existing = conn.execute(
+        "SELECT id, title FROM tracks WHERE album_id = ? ORDER BY medium_position, track_position, id",
+        (album_id,),
+    ).fetchall()
+    apple_by_title: dict[str, dict] = {}
+    for track in apple_tracks:
+        key = normalize_match_text(track.get("trackName"))
+        if key and apple_track_preview_url(track):
+            apple_by_title[key] = track
+    if not existing or not apple_by_title:
+        return 0
+
+    changed = 0
+    for row in existing:
+        apple_track = next((apple_by_title.get(key) for key in track_match_keys(row["title"]) if key in apple_by_title), None)
+        if not apple_track:
+            continue
+        conn.execute("UPDATE tracks SET preview_url = ? WHERE id = ?", (apple_track_preview_url(apple_track), row["id"]))
+        changed += 1
+    return changed
 
 
 def apply_apple_track_explicitness(
@@ -1825,7 +1862,10 @@ def apply_apple_track_explicitness(
             if not apple_track:
                 continue
             explicit = 1 if apple_track_is_explicit(apple_track) else 0
-            conn.execute("UPDATE tracks SET explicit = ? WHERE id = ?", (explicit, row["id"]))
+            conn.execute(
+                "UPDATE tracks SET explicit = ?, preview_url = COALESCE(?, preview_url) WHERE id = ?",
+                (explicit, apple_track_preview_url(apple_track), row["id"]),
+            )
             changed += 1
         return changed
 
@@ -1847,6 +1887,7 @@ def apply_apple_track_explicitness(
                 track.get("trackName"),
                 track.get("trackTimeMillis"),
                 1 if apple_track_is_explicit(track) else 0,
+                apple_track_preview_url(track),
                 f"apple_itunes:{track.get('trackId') or index}",
             )
         )
@@ -1856,8 +1897,8 @@ def apply_apple_track_explicitness(
         """
         INSERT INTO tracks (
             album_id, medium_position, medium_title, medium_format, track_position,
-            track_number, title, length_ms, explicit, recording_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            track_number, title, length_ms, explicit, preview_url, recording_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -2432,6 +2473,97 @@ def refresh_catalog_ids(conn: sqlite3.Connection, catalog_ids: list[str]) -> Non
     enrich_album_rows(conn, rows, refresh_cache=True)
 
 
+def apple_tracks_from_external_metadata(raw_json: str | None) -> list[dict]:
+    if not raw_json:
+        return []
+    try:
+        payload = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return []
+    return apple_track_rows(payload.get("lookup") or {})
+
+
+def fetch_apple_preview_tracks(conn: sqlite3.Connection, artist: str, album_name: str, refresh_cache: bool) -> tuple[list[dict], str | None]:
+    query = f"{artist} {album_name}".strip()
+    params = urllib.parse.urlencode({"term": query, "media": "music", "entity": "album", "limit": "25", "country": "US"})
+    url = f"https://itunes.apple.com/search?{params}"
+    payload, _, error = cached_json(conn, "apple_itunes", f"album-search:{query}", url, refresh_cache=refresh_cache)
+    selected = select_apple_album((payload or {}).get("results") or [], artist, album_name)
+
+    if not selected and not error and album_name:
+        song_params = urllib.parse.urlencode(
+            {
+                "term": album_name,
+                "media": "music",
+                "entity": "song",
+                "attribute": "albumTerm",
+                "limit": "50",
+                "country": "US",
+            }
+        )
+        song_url = f"https://itunes.apple.com/search?{song_params}"
+        song_payload, _, song_error = cached_json(
+            conn,
+            "apple_itunes",
+            f"album-song-search:{album_name}",
+            song_url,
+            refresh_cache=refresh_cache,
+        )
+        selected = select_apple_album_from_song_results((song_payload or {}).get("results") or [], artist, album_name)
+        if song_error:
+            error = song_error
+
+    collection_id = selected.get("collectionId") if selected else None
+    if not collection_id:
+        return [], error or "not found"
+
+    lookup_params = urllib.parse.urlencode({"id": collection_id, "entity": "song", "country": "US"})
+    lookup_url = f"https://itunes.apple.com/lookup?{lookup_params}"
+    lookup_payload, _, lookup_error = cached_json(
+        conn,
+        "apple_itunes",
+        f"collection:{collection_id}",
+        lookup_url,
+        refresh_cache=refresh_cache,
+    )
+    return apple_track_rows(lookup_payload or {}), lookup_error
+
+
+def scan_itunes_preview_links(conn: sqlite3.Connection, limit: int, offset: int, refresh_cache: bool) -> None:
+    rows = conn.execute(
+        """
+        SELECT albums.id, albums.row_number, albums.artist, albums.album_name,
+               external_metadata.raw_json AS apple_raw_json
+        FROM albums
+        LEFT JOIN external_metadata
+          ON external_metadata.album_id = albums.id
+         AND external_metadata.provider = 'apple_itunes'
+         AND external_metadata.lookup_status = 'matched'
+        ORDER BY albums.row_number
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+
+    for row in rows:
+        album_id = row["id"]
+        row_number = row["row_number"]
+        artist = row["artist"] or ""
+        album_name = row["album_name"] or ""
+        apple_tracks = apple_tracks_from_external_metadata(row["apple_raw_json"])
+        if refresh_cache or not apple_tracks:
+            apple_tracks, error = fetch_apple_preview_tracks(conn, artist, album_name, refresh_cache)
+            if error and not apple_tracks:
+                print(f"{row_number:03d}: {artist} - {album_name} -> preview scan {error}")
+                conn.commit()
+                continue
+
+        changed = update_apple_track_previews(conn, album_id, apple_tracks)
+        available = sum(1 for track in apple_tracks if apple_track_preview_url(track))
+        conn.commit()
+        print(f"{row_number:03d}: {artist} - {album_name} -> {changed} track previews linked ({available} Apple previews found)")
+
+
 def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Import the CD catalog CSV into SQLite and optionally enrich albums from local/API metadata providers.")
@@ -2439,6 +2571,7 @@ def main() -> None:
     parser.add_argument("--db", type=Path, default=DB_PATH)
     parser.add_argument("--enrich", type=int, default=0, help="Number of catalog rows to enrich.")
     parser.add_argument("--offset", type=int, default=0, help="Number of catalog rows to skip before enriching.")
+    parser.add_argument("--scan-itunes-previews", type=int, default=0, metavar="N", help="Scan N catalog rows for cached iTunes track preview links, starting after --offset rows.")
     parser.add_argument("--refresh-cache", action="store_true", help="Ignore cached API payloads and fetch fresh copies.")
     parser.add_argument(
         "--refresh-cache-ids",
@@ -2451,6 +2584,8 @@ def main() -> None:
         parser.error("--enrich must be 0 or greater.")
     if args.offset < 0:
         parser.error("--offset must be 0 or greater.")
+    if args.scan_itunes_previews < 0:
+        parser.error("--scan-itunes-previews must be 0 or greater.")
     refresh_cache_ids = parse_catalog_id_list(args.refresh_cache_ids)
 
     db_exists = args.db.exists()
@@ -2459,11 +2594,13 @@ def main() -> None:
         conn.row_factory = sqlite3.Row
         configure_sqlite_connection(conn)
         if db_exists:
+            ensure_track_preview_schema(conn)
             sanitize_cached_urls(conn)
             conn.commit()
         else:
             rows = read_catalog_rows(args.csv)
             create_schema(conn)
+            ensure_track_preview_schema(conn)
             sanitize_cached_urls(conn)
             import_catalog(conn, rows)
             conn.commit()
@@ -2471,6 +2608,8 @@ def main() -> None:
             enrich_first_albums(conn, args.enrich, args.offset, args.refresh_cache)
         if refresh_cache_ids:
             refresh_catalog_ids(conn, refresh_cache_ids)
+        if args.scan_itunes_previews:
+            scan_itunes_preview_links(conn, args.scan_itunes_previews, args.offset, args.refresh_cache)
     if db_exists:
         print(f"Updated existing database at {args.db}")
     else:

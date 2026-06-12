@@ -22,8 +22,6 @@ const state = {
   ],
 };
 
-const MUSIC_PREVIEWS_ENABLED = false;
-
 const previewState = {
   audio: new Audio(),
   button: null,
@@ -479,9 +477,6 @@ function renderDetail(payload) {
 
     ${artistBlock}
   `;
-  if (MUSIC_PREVIEWS_ENABLED) {
-    updateTrackPreviewAvailability(album, appleAlbum, tracks);
-  }
 }
 
 function renderRecordingIds(tracks) {
@@ -564,26 +559,34 @@ function renderTracks(album, tracks) {
     <ol class="tracks">
       ${tracks
         .map(
-          (track) => `
+          (track) => {
+            const previewUrl = track.preview_url || "";
+            return `
             <li>
               <span class="trackNumber">${escapeHtml(track.track_number || track.track_position)}</span>
               <span class="trackTitle">
-                <button
-                  class="previewButton"
-                  type="button"
-                  data-preview-track="${escapeAttribute(track.title)}"
-                  data-preview-artist="${escapeAttribute(album.artist)}"
-                  data-preview-album="${escapeAttribute(album.album_name)}"
-                  hidden
-                  aria-label="Play preview"
-                ></button>
+                ${
+                  previewUrl
+                    ? `<button
+                        class="previewButton"
+                        type="button"
+                        data-preview-url="${escapeAttribute(previewUrl)}"
+                        data-preview-track="${escapeAttribute(track.title)}"
+                        data-preview-artist="${escapeAttribute(album.artist)}"
+                        data-preview-album="${escapeAttribute(album.album_name)}"
+                        aria-label="Play preview"
+                        title="Play iTunes preview"
+                      ></button>`
+                    : ""
+                }
                 ${track.explicit ? `<span class="explicitBadge" title="Explicit lyrics" aria-label="Explicit lyrics">E</span>` : ""}
                 <span>${renderTrackTitle(album, track.title)}</span>
                 <span class="previewMessage" role="status"></span>
               </span>
               <span class="trackTime">${escapeHtml(formatDuration(track.length_ms))}</span>
             </li>
-          `,
+          `;
+          },
         )
         .join("")}
     </ol>
@@ -1029,7 +1032,6 @@ rowsEl.addEventListener("click", (event) => {
 detailEl.addEventListener("click", (event) => {
   const previewButton = event.target.closest("[data-preview-track]");
   if (previewButton) {
-    if (!MUSIC_PREVIEWS_ENABLED) return;
     togglePreview(previewButton);
     return;
   }
