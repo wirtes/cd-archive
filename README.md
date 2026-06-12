@@ -36,6 +36,8 @@ Every album keeps normalized provider records in `external_metadata`, one row pe
 | `.env` | Local API tokens. This file should not be committed. |
 | `.env.example` | Template showing supported token names. |
 | `scripts/build_database.py` | CSV import, schema creation, API enrichment, cache writes, and manual URL enrichment helpers. |
+| `scripts/migrate_sqlite_to_postgres.py` | One-time migration from the old SQLite database into Postgres. |
+| `scripts/setup_postgres_docker.sh` | Starts a local Postgres container with a persistent data directory. |
 | `app.py` | Local HTTP server and JSON API. |
 
 ## Environment
@@ -49,10 +51,15 @@ APP_USERNAME=admin
 APP_PASSWORD=change_this_password
 ```
 
-Optional persistent storage variables:
+Postgres is configured through `DATABASE_URL`. If it is not set, the app and scripts use the local Docker default:
 
 ```sh
 DATABASE_URL=postgresql://radio1190:radio1190@127.0.0.1:5432/radio1190_archive
+```
+
+Optional persistent image storage variables:
+
+```sh
 COVER_DIR=/var/lib/radio1190-archive/covers
 ARTIST_IMAGE_DIR=/var/lib/radio1190-archive/artist-images
 ENV_PATH=/etc/radio1190-archive.env
@@ -70,9 +77,7 @@ The default user is seeded as both an admin and editor. Admins can open `/admin.
 
 The `scripts/` directory contains the maintenance commands for importing data and running the app as a Debian system service.
 
-### `scripts/build_database.py`
-
-Imports `data/CD Catalog.csv` when the Postgres schema does not exist, creates the catalog tables, and optionally enriches albums from MusicBrainz, Discogs, Apple iTunes, and Last.fm. Existing schemas are opened in place so enrichment can be resumed without rebuilding.
+### Local Postgres Setup
 
 Start a local Postgres container with persistent storage:
 
@@ -80,7 +85,7 @@ Start a local Postgres container with persistent storage:
 scripts/setup_postgres_docker.sh
 ```
 
-On macOS, start Docker Desktop before running the setup script.
+The setup script starts or creates a Docker container named `radio1190-postgres`, stores database files in `data/postgres/` by default, waits for Postgres to accept connections, and prints the `DATABASE_URL` value to add to `.env`. On macOS, start Docker Desktop before running the script.
 
 Create a local Python virtual environment and install dependencies:
 
@@ -90,19 +95,41 @@ python3 -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-Migrate an existing SQLite database into Postgres:
+Use the virtual environment for every app/script command:
+
+```sh
+. .venv/bin/activate
+```
+
+### Migrating From SQLite
+
+If you have an existing `cd_catalog.sqlite`, migrate it into Postgres before running `build_database.py`. This preserves enriched metadata, cached API responses, users, sessions, artist records, cover metadata, and iTunes preview links.
+
+Default local SQLite path:
 
 ```sh
 python scripts/migrate_sqlite_to_postgres.py --sqlite data/cd_catalog.sqlite --recreate
 ```
 
-For a server SQLite database, pass its full path:
+Server SQLite path:
 
 ```sh
 python scripts/migrate_sqlite_to_postgres.py --sqlite /var/lib/radio1190-archive/data/cd_catalog.sqlite --recreate
 ```
 
 `--recreate` drops and rebuilds the Postgres catalog tables before copying data. Omit it only when you intentionally want to keep the existing Postgres schema.
+
+Use `--append` only when you intentionally want to copy SQLite rows into an existing Postgres database without truncating current Postgres rows:
+
+```sh
+python scripts/migrate_sqlite_to_postgres.py --sqlite data/cd_catalog.sqlite --append
+```
+
+### `scripts/build_database.py`
+
+Imports `data/CD Catalog.csv` only when the Postgres schema does not exist, creates the catalog tables, and optionally enriches albums from MusicBrainz, Discogs, Apple iTunes, and Last.fm. Existing schemas are opened in place so enrichment can be resumed without rebuilding.
+
+For a migrated installation, run enrichment commands after the migration. Do not run a fresh build first unless you intentionally want to create the database from the CSV.
 
 Import the CSV only:
 
@@ -178,10 +205,10 @@ Notes:
 
 Creates and starts a `systemd` service for the web app on Debian or Debian-like Linux systems.
 
-Run it with `sudo`:
+Run it with `sudo`. If you installed dependencies in the project virtual environment, pass that Python path:
 
 ```sh
-sudo scripts/install_debian_service.sh
+PYTHON_BIN="$PWD/.venv/bin/python" sudo -E scripts/install_debian_service.sh
 ```
 
 The script:
@@ -204,7 +231,7 @@ Default values:
 | `SERVICE_NAME` | `radio1190-archive` | Name of the systemd service. |
 | `APP_DIR` | repository root | Directory containing `app.py`. |
 | `RUN_USER` | the sudoing user | Linux user account that runs the app. |
-| `PYTHON_BIN` | `/usr/bin/python3` | Python executable used by the service. |
+| `PYTHON_BIN` | `/usr/bin/python3` | Python executable used by the service. Use `$PWD/.venv/bin/python` when dependencies were installed in the project virtual environment. |
 | `HOST` | `0.0.0.0` | Bind address for the web app. |
 | `PORT` | `8190` | Port passed to the app. |
 | `DATA_DIR` | `/var/lib/radio1190-archive` | Base directory for persistent server data. |
@@ -253,7 +280,7 @@ This script must use `sudo` because restarting a system service requires root pr
 
 ## Server Data Outside The Repo
 
-Use this once on the Debian server after pulling code that supports `DATABASE_URL`, `COVER_DIR`, and `ARTIST_IMAGE_DIR`.
+Use this once on a Debian server after pulling code that supports Postgres, `DATABASE_URL`, `COVER_DIR`, and `ARTIST_IMAGE_DIR`.
 
 Stop the service:
 
@@ -265,6 +292,16 @@ Start Postgres with a persistent data directory:
 
 ```sh
 POSTGRES_DATA_DIR=/var/lib/radio1190-archive/postgres scripts/setup_postgres_docker.sh
+```
+
+If Docker is not installed or the daemon is not running, install/start Docker first, then rerun the setup script. The app cannot connect to Postgres until this container is running.
+
+Create a virtual environment and install Python dependencies:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
 Create persistent image directories:
@@ -292,10 +329,24 @@ EOF
 
 Use your real token and password values. Keep this file out of git.
 
-Reinstall the systemd unit so it points at persistent storage:
+For an existing server with an old SQLite database, migrate it now:
 
 ```sh
-sudo -E scripts/install_debian_service.sh
+. .venv/bin/activate
+python scripts/migrate_sqlite_to_postgres.py --sqlite /var/lib/radio1190-archive/data/cd_catalog.sqlite --recreate
+```
+
+For a clean server with no old SQLite database, create the Postgres schema from the CSV instead:
+
+```sh
+. .venv/bin/activate
+python scripts/build_database.py
+```
+
+Reinstall the systemd unit so it points at persistent storage, uses the configured Postgres URL, and runs the virtualenv Python that has `psycopg` installed:
+
+```sh
+PYTHON_BIN="$PWD/.venv/bin/python" sudo -E scripts/install_debian_service.sh
 ```
 
 Verify the service and paths:
@@ -327,7 +378,8 @@ tar -czf "/var/lib/radio1190-archive/images-$(date +%F-%H%M).tgz" \
 ## Run The App
 
 ```sh
-python3 app.py
+. .venv/bin/activate
+python app.py
 ```
 
 Open:
