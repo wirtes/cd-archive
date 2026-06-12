@@ -588,17 +588,6 @@ def get_album_bundle(conn, album_id):
         """,
         (album_id,),
     ).fetchall()
-    artist_info = None
-    if not album["compilation"] and not is_various_artist(album["artist"]):
-        artist_info = conn.execute(
-            """
-            SELECT name, lookup_status, lookup_error, fetched_at, lastfm_mbid,
-                   lastfm_url, bio_summary, bio_content, image_url, local_image_url
-            FROM artists
-            WHERE name = ?
-            """,
-            (album["artist"],),
-        ).fetchone()
     external_rows = []
     for row in external:
         item = dict(row)
@@ -625,6 +614,8 @@ def get_album_bundle(conn, album_id):
         item.pop("raw_json", None)
         external_rows.append(item)
 
+    artist_info = find_artist_info(conn, album, external_rows)
+
     return {
         "album": dict(album),
         "artist": dict(artist_info) if artist_info else None,
@@ -635,6 +626,29 @@ def get_album_bundle(conn, album_id):
         "external": external_rows,
         "services": [dict(row) for row in services],
     }
+
+
+def find_artist_info(conn, album, external_rows):
+    candidates = []
+    for value in [album["artist"], *(row.get("artist") for row in external_rows)]:
+        value = clean_text(value)
+        if value and not is_various_artist(value) and value not in candidates:
+            candidates.append(value)
+    for artist_name in candidates:
+        artist_info = conn.execute(
+            """
+            SELECT name, lookup_status, lookup_error, fetched_at, lastfm_mbid,
+                   lastfm_url, bio_summary, bio_content, image_url, local_image_url
+            FROM artists
+            WHERE LOWER(name) = LOWER(?)
+            ORDER BY CASE lookup_status WHEN 'matched' THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (artist_name,),
+        ).fetchone()
+        if artist_info:
+            return artist_info
+    return None
 
 
 class CatalogHandler(SimpleHTTPRequestHandler):
