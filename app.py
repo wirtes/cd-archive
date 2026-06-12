@@ -641,6 +641,12 @@ class CatalogHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
+    def end_headers(self):
+        parsed = urlparse(self.path)
+        if Path(parsed.path).suffix in {".html", ".js", ".css"}:
+            self.send_header("Cache-Control", "no-cache, max-age=0")
+        super().end_headers()
+
     def send_persistent_file(self, root, url_prefix, parsed):
         relative = unquote(parsed.path.removeprefix(url_prefix)).lstrip("/")
         candidate = (root / relative).resolve()
