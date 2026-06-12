@@ -31,7 +31,7 @@ body {
 .loginForm {
   display: grid;
   gap: 14px;
-  padding: 24px;
+  padding: 0 24px 24px;
   border: 1px solid var(--line);
   border-top: 4px solid var(--accent);
   border-radius: 6px;
@@ -39,12 +39,33 @@ body {
   box-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
 }
 
-img {
+.loginBrandBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  height: 112px;
+  margin: 0 -24px;
+  padding: 18px 0;
+  overflow: hidden;
+  border-radius: 2px 2px 0 0;
+  background: #000000;
+}
+
+.loginBrandBar img {
+  display: block;
+  object-fit: contain;
+}
+
+.stationLogo {
+  flex: 0 0 auto;
   width: 137px;
-  height: auto;
-  padding: 10px;
-  border-radius: 4px;
-  background: var(--nav);
+  max-height: 76px;
+}
+
+.spaceDogLogo {
+  flex: 0 0 auto;
+  width: 76px;
+  max-height: 76px;
 }
 
 h1 {
