@@ -8,6 +8,7 @@ POSTGRES_DB="${POSTGRES_DB:-radio1190_archive}"
 POSTGRES_USER="${POSTGRES_USER:-radio1190}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-radio1190}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+POSTGRES_RESTART_POLICY="${POSTGRES_RESTART_POLICY:-unless-stopped}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is not installed. Install Docker Desktop, start it, then rerun this script." >&2
@@ -32,8 +33,11 @@ else
     -e POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
     -p "${POSTGRES_PORT}:5432" \
     -v "${DATA_DIR}:/var/lib/postgresql/data" \
+    --restart "${POSTGRES_RESTART_POLICY}" \
     "${POSTGRES_IMAGE}" >/dev/null
 fi
+
+docker update --restart "${POSTGRES_RESTART_POLICY}" "${CONTAINER_NAME}" >/dev/null
 
 echo "Waiting for Postgres to accept connections..."
 until docker exec "${CONTAINER_NAME}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; do
@@ -46,6 +50,7 @@ Postgres is running.
 
 Container: ${CONTAINER_NAME}
 Data dir:   ${DATA_DIR}
+Restart:    ${POSTGRES_RESTART_POLICY}
 URL:        ${DATABASE_URL}
 
 Add this to .env or /etc/radio1190-archive.env:

@@ -85,7 +85,7 @@ Start a local Postgres container with persistent storage:
 scripts/setup_postgres_docker.sh
 ```
 
-The setup script starts or creates a Docker container named `radio1190-postgres`, stores database files in `data/postgres/` by default, waits for Postgres to accept connections, and prints the `DATABASE_URL` value to add to `.env`. On macOS, start Docker Desktop before running the script.
+The setup script starts or creates a Docker container named `radio1190-postgres`, stores database files in `data/postgres/` by default, sets Docker's restart policy to `unless-stopped`, waits for Postgres to accept connections, and prints the `DATABASE_URL` value to add to `.env`. On macOS, start Docker Desktop before running the script.
 
 Create a local Python virtual environment and install dependencies:
 
