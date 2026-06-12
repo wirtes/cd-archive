@@ -7,5 +7,6 @@ enrich.log
 # Runtime database and cached media
 data/*.sqlite
 data/*.sqlite-*
+data/postgres/
 web/covers/
 web/artist-images/

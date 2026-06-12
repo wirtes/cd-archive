@@ -1,10 +1,10 @@
 # Radio 1190 Music Archive
 
-A local SQLite-backed browser for the Radio 1190 CD catalog. The app imports `data/CD Catalog.csv`, enriches catalog rows with MusicBrainz, Discogs, Apple iTunes, and Last.fm metadata, caches API responses locally, downloads usable cover/artist images, and serves a lightweight web interface on port `8190`.
+A local Postgres-backed browser for the Radio 1190 CD catalog. The app imports `data/CD Catalog.csv`, enriches catalog rows with MusicBrainz, Discogs, Apple iTunes, and Last.fm metadata, caches API responses locally, downloads usable cover/artist images, and serves a lightweight web interface on port `8190`.
 
 ## What It Stores
 
-The original spreadsheet remains the source of truth for supplied catalog rows. The SQLite database extends those rows with a master album record assembled from external services in this priority order:
+The original spreadsheet remains the source of truth for supplied catalog rows. The Postgres database extends those rows with a master album record assembled from external services in this priority order:
 
 1. Apple iTunes
 2. Discogs
@@ -30,7 +30,6 @@ Every album keeps normalized provider records in `external_metadata`, one row pe
 | Path | Purpose |
 | --- | --- |
 | `data/CD Catalog.csv` | Source spreadsheet export. |
-| `data/cd_catalog.sqlite` | Generated SQLite database used by the app unless `DATABASE_PATH` points elsewhere. |
 | `web/` | Static frontend files served by `app.py`. |
 | `web/covers/` | Locally cached album cover images unless `COVER_DIR` points elsewhere. |
 | `web/artist-images/` | Locally cached Last.fm artist images unless `ARTIST_IMAGE_DIR` points elsewhere. |
@@ -53,13 +52,13 @@ APP_PASSWORD=change_this_password
 Optional persistent storage variables:
 
 ```sh
-DATABASE_PATH=/var/lib/radio1190-archive/data/cd_catalog.sqlite
+DATABASE_URL=postgresql://radio1190:radio1190@127.0.0.1:5432/radio1190_archive
 COVER_DIR=/var/lib/radio1190-archive/covers
 ARTIST_IMAGE_DIR=/var/lib/radio1190-archive/artist-images
 ENV_PATH=/etc/radio1190-archive.env
 ```
 
-On a server, use paths outside the repository for the SQLite database and cached images. That lets you update code with `git pull` without replacing live catalog data or downloaded artwork.
+On a server, use Postgres plus paths outside the repository for cached images. That lets you update code with `git pull` without replacing live downloaded artwork.
 
 MusicBrainz and Apple iTunes do not require tokens, but the script identifies MusicBrainz requests with a user agent. Uncached MusicBrainz, Cover Art Archive, Discogs, Apple iTunes, and Last.fm API calls are throttled so enrichment stays polite to external services.
 
@@ -73,49 +72,79 @@ The `scripts/` directory contains the maintenance commands for importing data an
 
 ### `scripts/build_database.py`
 
-Imports `data/CD Catalog.csv` when the database does not exist, creates `data/cd_catalog.sqlite`, and optionally enriches albums from MusicBrainz, Discogs, Apple iTunes, and Last.fm. Existing databases are opened in place so enrichment can be resumed without rebuilding the schema.
+Imports `data/CD Catalog.csv` when the Postgres schema does not exist, creates the catalog tables, and optionally enriches albums from MusicBrainz, Discogs, Apple iTunes, and Last.fm. Existing schemas are opened in place so enrichment can be resumed without rebuilding.
+
+Start a local Postgres container with persistent storage:
+
+```sh
+scripts/setup_postgres_docker.sh
+```
+
+On macOS, start Docker Desktop before running the setup script.
+
+Create a local Python virtual environment and install dependencies:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Migrate an existing SQLite database into Postgres:
+
+```sh
+python scripts/migrate_sqlite_to_postgres.py --sqlite data/cd_catalog.sqlite --recreate
+```
+
+For a server SQLite database, pass its full path:
+
+```sh
+python scripts/migrate_sqlite_to_postgres.py --sqlite /var/lib/radio1190-archive/data/cd_catalog.sqlite --recreate
+```
+
+`--recreate` drops and rebuilds the Postgres catalog tables before copying data. Omit it only when you intentionally want to keep the existing Postgres schema.
 
 Import the CSV only:
 
 ```sh
-python3 scripts/build_database.py
+python scripts/build_database.py
 ```
 
 Import the CSV and enrich the first 50 catalog rows:
 
 ```sh
-python3 scripts/build_database.py --enrich 50
+python scripts/build_database.py --enrich 50
 ```
 
-Use a different CSV or database path:
+Use a different CSV or Postgres URL:
 
 ```sh
-python3 scripts/build_database.py --csv path/to/catalog.csv --db data/test_catalog.sqlite
+python scripts/build_database.py --csv path/to/catalog.csv --database-url postgresql://radio1190:radio1190@127.0.0.1:5432/radio1190_archive
 ```
 
 Force fresh API calls instead of using cached payloads:
 
 ```sh
-python3 scripts/build_database.py --enrich 50 --refresh-cache
+python scripts/build_database.py --enrich 50 --refresh-cache
 ```
 
 Resume a batch after skipping earlier catalog rows:
 
 ```sh
-python3 scripts/build_database.py --enrich 50 --offset 40
+python scripts/build_database.py --enrich 50 --offset 40
 ```
 
 Pre-scan a batch for iTunes track preview links:
 
 ```sh
-python3 scripts/build_database.py --scan-itunes-previews 50 --offset 40
+python scripts/build_database.py --scan-itunes-previews 50 --offset 40
 ```
 
 Refresh cached API payloads for specific `1190_ID` values only:
 
 ```sh
-python3 scripts/build_database.py --refresh-cache-ids ABC123 DEF456
-python3 scripts/build_database.py --refresh-cache-ids ABC123,DEF456,GHI789
+python scripts/build_database.py --refresh-cache-ids ABC123 DEF456
+python scripts/build_database.py --refresh-cache-ids ABC123,DEF456,GHI789
 ```
 
 Options:
@@ -123,7 +152,8 @@ Options:
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `--csv` | `data/CD Catalog.csv` | Spreadsheet export to import when the database does not already exist. |
-| `--db` | `data/cd_catalog.sqlite` | SQLite database to create or update. |
+| `--database-url` | `DATABASE_URL` or local Docker default | Postgres database to create or update. |
+| `--db` | unset | Deprecated compatibility option; ignored. |
 | `--enrich N` | `0` | Enrich `N` catalog rows. |
 | `--offset N` | `0` | Skip `N` catalog rows before `--enrich` begins. |
 | `--scan-itunes-previews N` | `0` | Scan `N` catalog rows for iTunes track preview links, starting after `--offset` rows. |
@@ -138,8 +168,8 @@ Notes:
 - Discogs enrichment is skipped when `DISCOGS_TOKEN` is not set.
 - Apple iTunes enrichment does not require an API key.
 - Last.fm album and artist enrichment is skipped when `LASTFM_API_KEY` is not set.
-- The script creates and imports the catalog only when the database file does not exist. Existing databases are preserved and updated in place.
-- API payloads are cached in SQLite and reused on later enrichment calls unless `--refresh-cache` or `--refresh-cache-ids` is supplied.
+- The script creates and imports the catalog only when the Postgres schema does not exist. Existing databases are preserved and updated in place.
+- API payloads are cached in Postgres and reused on later enrichment calls unless `--refresh-cache` or `--refresh-cache-ids` is supplied.
 - Uncached provider requests are throttled per service. Cached responses return immediately.
 - Cover images are saved under `COVER_DIR`, defaulting to `web/covers/`.
 - Artist images are saved under `ARTIST_IMAGE_DIR`, defaulting to `web/artist-images/`.
@@ -160,7 +190,7 @@ The script:
 - Sets the service working directory to this repository.
 - Runs `app.py` with Python.
 - Loads `/etc/radio1190-archive.env` when it exists.
-- Sets `HOST`, `PORT`, `DATABASE_PATH`, `COVER_DIR`, `ARTIST_IMAGE_DIR`, and `ENV_PATH` in the service environment.
+- Sets `HOST`, `PORT`, `DATABASE_URL`, `COVER_DIR`, `ARTIST_IMAGE_DIR`, and `ENV_PATH` in the service environment.
 - Creates the persistent data and image directories.
 - Runs `systemctl daemon-reload`.
 - Enables the service at boot.
@@ -179,7 +209,7 @@ Default values:
 | `PORT` | `8190` | Port passed to the app. |
 | `DATA_DIR` | `/var/lib/radio1190-archive` | Base directory for persistent server data. |
 | `ENV_FILE` | `/etc/radio1190-archive.env` | Environment file loaded by systemd and used as `ENV_PATH`. |
-| `DATABASE_PATH` | `$DATA_DIR/data/cd_catalog.sqlite` | Live SQLite database path. |
+| `DATABASE_URL` | `postgresql://radio1190:radio1190@127.0.0.1:5432/radio1190_archive` | Live Postgres connection URL. |
 | `COVER_DIR` | `$DATA_DIR/covers` | Live album cover cache path. |
 | `ARTIST_IMAGE_DIR` | `$DATA_DIR/artist-images` | Live artist image cache path. |
 
@@ -221,9 +251,9 @@ SERVICE_NAME=my-archive sudo -E scripts/restart_debian_service.sh
 
 This script must use `sudo` because restarting a system service requires root privileges.
 
-## Move Server Data Outside The Repo
+## Server Data Outside The Repo
 
-Use this once on the Debian server after pulling code that supports `DATABASE_PATH`, `COVER_DIR`, and `ARTIST_IMAGE_DIR`. These commands copy data first and leave the original files in place until you verify the app.
+Use this once on the Debian server after pulling code that supports `DATABASE_URL`, `COVER_DIR`, and `ARTIST_IMAGE_DIR`.
 
 Stop the service:
 
@@ -231,18 +261,17 @@ Stop the service:
 sudo systemctl stop radio1190-archive.service
 ```
 
-Create persistent directories:
+Start Postgres with a persistent data directory:
 
 ```sh
-sudo install -d -o "$USER" -g "$USER" /var/lib/radio1190-archive/data
-sudo install -d -o "$USER" -g "$USER" /var/lib/radio1190-archive/covers
-sudo install -d -o "$USER" -g "$USER" /var/lib/radio1190-archive/artist-images
+POSTGRES_DATA_DIR=/var/lib/radio1190-archive/postgres scripts/setup_postgres_docker.sh
 ```
 
-Copy the live database and cached images without deleting the originals:
+Create persistent image directories:
 
 ```sh
-cp -n data/cd_catalog.sqlite /var/lib/radio1190-archive/data/
+sudo install -d -o "$USER" -g "$USER" /var/lib/radio1190-archive/covers
+sudo install -d -o "$USER" -g "$USER" /var/lib/radio1190-archive/artist-images
 cp -an web/covers/. /var/lib/radio1190-archive/covers/
 cp -an web/artist-images/. /var/lib/radio1190-archive/artist-images/
 ```
@@ -255,7 +284,7 @@ DISCOGS_TOKEN=your_discogs_token
 LASTFM_API_KEY=your_lastfm_api_key
 APP_USERNAME=admin
 APP_PASSWORD=change_this_password
-DATABASE_PATH=/var/lib/radio1190-archive/data/cd_catalog.sqlite
+DATABASE_URL=postgresql://radio1190:radio1190@127.0.0.1:5432/radio1190_archive
 COVER_DIR=/var/lib/radio1190-archive/covers
 ARTIST_IMAGE_DIR=/var/lib/radio1190-archive/artist-images
 EOF
@@ -289,7 +318,7 @@ Avoid deployment commands that delete untracked files inside the repo, such as `
 Recommended backup before major updates:
 
 ```sh
-sqlite3 /var/lib/radio1190-archive/data/cd_catalog.sqlite ".backup '/var/lib/radio1190-archive/data/cd_catalog-$(date +%F-%H%M).sqlite'"
+docker exec radio1190-postgres pg_dump -U radio1190 radio1190_archive > "/var/lib/radio1190-archive/radio1190-archive-$(date +%F-%H%M).sql"
 tar -czf "/var/lib/radio1190-archive/images-$(date +%F-%H%M).tgz" \
   /var/lib/radio1190-archive/covers \
   /var/lib/radio1190-archive/artist-images
@@ -335,7 +364,7 @@ Open an album and click `Edit` to manually match the catalog row to a service UR
 - Apple Music album URL, for example `https://music.apple.com/us/album/<album>/<collection-id>`
 - Last.fm album URL, for example `https://www.last.fm/music/<artist>/<album>`
 
-Click `Get Album Info` to preview metadata and album art in the Edit form without saving anything to the catalog database. When the form is saved, the supplied URL becomes the anchor match for that album. Discogs master URLs are resolved through the master record's `main_release`. The app then uses the artist/title from that service to look up the same album in the other services, stores the results in SQLite, and refreshes the sidebar.
+Click `Get Album Info` to preview metadata and album art in the Edit form without saving anything to the catalog database. When the form is saved, the supplied URL becomes the anchor match for that album. Discogs master URLs are resolved through the master record's `main_release`. The app then uses the artist/title from that service to look up the same album in the other services, stores the results in Postgres, and refreshes the sidebar.
 
 Manual matches prefer Discogs tracklists when a Discogs release or master record is found. The app reapplies the cached Discogs detail payload after the other service lookups finish so a later MusicBrainz lookup does not erase the Discogs tracklist, then applies Apple iTunes explicit-lyrics flags to matching tracks.
 
@@ -343,7 +372,7 @@ Manual matches prefer Discogs tracklists when a Discogs release or master record
 
 Use the header `Add` button to add a new album manually. The Add form can load album data from a Discogs release or master URL only. This keeps new user-created records anchored to Discogs and avoids broad multi-service searching during entry. Existing albums can use the Edit form's `Match to this Album` field with MusicBrainz, Discogs, Apple Music, or Last.fm URLs.
 
-Album detail views include `Edit` and `Delete` buttons. Edit updates the catalog fields stored on `albums`; Delete removes the album and its dependent cached metadata through SQLite foreign-key cascades.
+Album detail views include `Edit` and `Delete` buttons. Edit updates the catalog fields stored on `albums`; Delete removes the album and its dependent cached metadata through Postgres foreign-key cascades.
 
 The Add/Edit form includes:
 
@@ -539,7 +568,7 @@ flowchart LR
     Env[".env or /etc/radio1190-archive.env"] --> Builder
     Env --> App["app.py JSON API"]
 
-    Builder --> DB[("DATABASE_PATH")]
+    Builder --> DB[("DATABASE_URL")]
     Builder --> Covers["COVER_DIR"]
     Builder --> ArtistImages["ARTIST_IMAGE_DIR"]
 
