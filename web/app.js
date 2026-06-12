@@ -681,7 +681,7 @@ function showAlbumForm(mode = "add", payload = null) {
           : `<label class="formField wide" for="add-service-url">
               <span>Load from Music Service URL</span>
               <div class="serviceLookupRow">
-                <input id="add-service-url" name="music_service_url" type="url" placeholder="Discogs release or master URL" />
+                <input id="add-service-url" name="music_service_url" type="url" placeholder="Apple, Discogs, Last.fm, or MusicBrainz album URL" />
                 <button type="button" data-load-service-url>Load</button>
               </div>
             </label>`
@@ -1215,10 +1215,10 @@ async function loadServiceUrlIntoAddForm(form) {
   const button = form.querySelector("[data-load-service-url]");
   const serviceUrl = form.elements.music_service_url.value.trim();
   if (!serviceUrl) {
-    message.textContent = "Enter a Discogs release or master URL.";
+    message.textContent = "Enter an Apple, Discogs, Last.fm, or MusicBrainz album URL.";
     return;
   }
-  message.textContent = "Looking up Discogs data...";
+  message.textContent = "Looking up album info...";
   button.disabled = true;
   try {
     const current = addFormValues(form);
@@ -1236,7 +1236,7 @@ async function loadServiceUrlIntoAddForm(form) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Unable to load music service data.");
     populateAddFormFromBundle(form, payload);
-    message.textContent = "Loaded Discogs data. Review the fields before saving.";
+    message.textContent = "Loaded album info. Review the fields before saving.";
   } catch (error) {
     message.textContent = error.message;
   } finally {
@@ -1290,7 +1290,7 @@ async function saveAddedAlbum(form) {
     return;
   }
   if (!values.artist && !values.album_name && !serviceUrl) {
-    message.textContent = "Artist, album name, or Discogs URL is required.";
+    message.textContent = "Artist, album name, or Music Service URL is required.";
     setFieldInvalid(form.elements.artist);
     setFieldInvalid(form.elements.album_name);
     setFieldInvalid(form.elements.music_service_url);

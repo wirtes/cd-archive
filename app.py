@@ -58,7 +58,6 @@ from scripts.build_database import (
     discogs_is_compilation,
     discogs_track_artist,
     duration_to_ms,
-    enrich_album_from_discogs_url,
     enrich_album_from_service_url,
     fetch_apple_collection_id,
     first_joined,
@@ -1096,14 +1095,14 @@ class CatalogHandler(SimpleHTTPRequestHandler):
         if q:
             search_parts = [
                 """
-                albums.artist LIKE ? OR albums.album_name LIKE ? OR albums.catalog_number LIKE ?
-                OR albums.label LIKE ? OR albums.format LIKE ? OR albums.country LIKE ?
-                OR albums.released LIKE ? OR albums.genre LIKE ?
+                albums.artist ILIKE ? OR albums.album_name ILIKE ? OR albums.catalog_number ILIKE ?
+                OR albums.label ILIKE ? OR albums.format ILIKE ? OR albums.country ILIKE ?
+                OR albums.released ILIKE ? OR albums.genre ILIKE ?
                 OR EXISTS (
                     SELECT 1
                     FROM external_metadata
                     WHERE external_metadata.album_id = albums.id
-                      AND (external_metadata.title LIKE ? OR external_metadata.artist LIKE ?)
+                      AND (external_metadata.title ILIKE ? OR external_metadata.artist ILIKE ?)
                 )
                 """
             ]
@@ -1116,7 +1115,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                         SELECT 1
                         FROM tracks
                         WHERE tracks.album_id = albums.id
-                          AND tracks.title LIKE ?
+                          AND tracks.title ILIKE ?
                     )
                     """
                 )
@@ -1360,7 +1359,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                 },
                 row_number=1,
             )
-            result = enrich_album_from_discogs_url(conn, album_id, service_url, refresh_cache=False, include_related=False)
+            result = enrich_album_from_service_url(conn, album_id, service_url, refresh_cache=False)
             self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
             bundle = get_album_bundle(conn, album_id)
         except ValueError as exc:
@@ -1689,7 +1688,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
             with self.db() as conn:
                 album_id = self.insert_album(conn, form)
                 if service_url:
-                    result = enrich_album_from_discogs_url(conn, album_id, service_url, refresh_cache=False)
+                    result = enrich_album_from_service_url(conn, album_id, service_url, refresh_cache=False)
                     self.apply_album_identity(conn, album_id, result.get("artist"), result.get("album_name"))
                 if "tracks" in payload:
                     self.replace_album_tracks(conn, album_id, payload.get("tracks"))

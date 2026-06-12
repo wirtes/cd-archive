@@ -199,7 +199,14 @@ function populateDesktopForm(album) {
 function populateDesktopFormFromPreview(payload, serviceUrl) {
   const album = payload.album || {};
   const external = payload.external || [];
-  const match = external.find((item) => item.provider === "discogs" && item.lookup_status === "matched") || external[0] || {};
+  const providerOrder = ["apple_itunes", "discogs", "lastfm", "musicbrainz"];
+  const match =
+    providerOrder
+      .map((provider) => external.find((item) => item.provider === provider && item.lookup_status === "matched"))
+      .find(Boolean) ||
+    external.find((item) => item.lookup_status === "matched") ||
+    external[0] ||
+    {};
   populateDesktopForm({
     ...album,
     artist: match.artist || album.artist,
@@ -418,10 +425,10 @@ async function loadDesktopServiceUrl() {
   setFieldInvalid(desktopAddForm.elements.music_service_url, false);
   if (!serviceUrl) {
     setFieldInvalid(desktopAddForm.elements.music_service_url);
-    if (desktopServiceMessage) desktopServiceMessage.textContent = "Enter a Discogs release or master URL.";
+    if (desktopServiceMessage) desktopServiceMessage.textContent = "Enter an Apple, Discogs, Last.fm, or MusicBrainz album URL.";
     return;
   }
-  if (desktopServiceMessage) desktopServiceMessage.textContent = "Looking up Discogs data...";
+  if (desktopServiceMessage) desktopServiceMessage.textContent = "Looking up album info...";
   if (desktopLoadServiceButton) desktopLoadServiceButton.disabled = true;
   try {
     const album = desktopFormAlbum();
@@ -450,8 +457,8 @@ async function loadDesktopServiceUrl() {
     };
     populateDesktopFormFromPreview(payload, serviceUrl);
     showRelease(currentRelease);
-    if (desktopServiceMessage) desktopServiceMessage.textContent = "Loaded Discogs data. Review the fields before saving.";
-    if (desktopListenerStatus) desktopListenerStatus.textContent = "Discogs URL loaded. Review the form, then click Add.";
+    if (desktopServiceMessage) desktopServiceMessage.textContent = "Loaded album info. Review the fields before saving.";
+    if (desktopListenerStatus) desktopListenerStatus.textContent = "Music service URL loaded. Review the form, then click Add.";
     setStatus("Album info loaded. Add an 1190_ID, then hit Add Album.");
   } catch (error) {
     if (desktopServiceMessage) desktopServiceMessage.textContent = error.message;

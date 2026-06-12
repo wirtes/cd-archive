@@ -422,7 +422,7 @@ Manual matches prefer Discogs tracklists when a Discogs release or master record
 
 ## Add And Edit Albums
 
-Use the header `Add` button to add a new album manually. The Add form can load album data from a Discogs release or master URL only. This keeps new user-created records anchored to Discogs and avoids broad multi-service searching during entry. Existing albums can use the Edit form's `Match to this Album` field with MusicBrainz, Discogs, Apple Music, or Last.fm URLs.
+Use the header `Add` button to add a new album manually. The Add form can load album data from Apple Music/iTunes, Discogs release/master, Last.fm, or MusicBrainz release URLs. Existing albums can use the Edit form's `Match to this Album` field with the same music-service URLs.
 
 Album detail views include `Edit` and `Delete` buttons. Edit updates the catalog fields stored on `albums`; Delete removes the album and its dependent cached metadata through Postgres foreign-key cascades.
 
@@ -637,9 +637,9 @@ flowchart LR
     App --> Browser
 
     Browser --> ManualURL["Edit form Match to this Album URL"]
-    Browser --> AddDiscogs["Add form Discogs URL"]
+    Browser --> AddServiceURL["Add form music-service URL"]
     ManualURL --> App
-    AddDiscogs --> App
+    AddServiceURL --> App
     App --> Builder
 ```
 
@@ -648,11 +648,11 @@ flowchart LR
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/api/albums` | `GET` | List albums with optional filters: `q`, `tag`, `artist`, `label`, `hide_na`, `search_tracks`, `enriched`, `limit`, `offset`. |
-| `/api/albums` | `POST` | Create an album from Add form fields, optional Discogs URL, and optional cover upload. |
+| `/api/albums` | `POST` | Create an album from Add form fields, optional music-service URL, and optional cover upload. |
 | `/api/albums/<id>` | `GET` | Return one album, service metadata, tracks, genres, covers, and artist profile. |
 | `/api/albums/<id>` | `PUT` | Update an album from Edit form fields and optional cover upload. |
 | `/api/albums/<id>` | `DELETE` | Delete an album and dependent cached rows. |
-| `/api/music-service-preview` | `POST` | Preview Discogs release/master metadata for the Add form without creating a catalog row. |
+| `/api/music-service-preview` | `POST` | Preview Apple Music/iTunes, Discogs, Last.fm, or MusicBrainz metadata for the Add form without creating a catalog row. |
 | `/api/music-service-match-preview` | `POST` | Preview MusicBrainz, Discogs, Apple Music/iTunes, or Last.fm metadata and album art for the Edit form without updating the catalog database. |
 | `/api/discogs-barcode-preview` | `POST` | Preview a Discogs release from a UPC barcode for the mobile add page. |
 | `/api/scan-events` | `GET`/`POST` | Relay same-user mobile barcode scans to a desktop add page. |

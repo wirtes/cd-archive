@@ -2405,7 +2405,7 @@ def enrich_album_from_discogs_url(
 
     provider, data = parse_music_service_url(service_url)
     if provider != "discogs":
-        raise ValueError("Add Album can only load Discogs release or master URLs.")
+        raise ValueError("This helper only accepts Discogs release or master URLs.")
 
     if data.get("master_id"):
         anchor_artist, anchor_title = fetch_discogs_master_id(conn, album_id, data["master_id"], refresh_cache)
