@@ -91,6 +91,7 @@ PUBLIC_PATHS = {
     "/api/login",
     "/images/favicon.ico",
     "/images/1190-logo-reversed-300x180.png",
+    "/images/spacedog-animated-white.gif",
 }
 
 
