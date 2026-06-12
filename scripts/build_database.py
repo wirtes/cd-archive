@@ -427,8 +427,26 @@ def cached_json(
             (provider, cache_key),
         ).fetchone()
         if row:
-            raw_json, error = row
-            return json.loads(raw_json) if raw_json else None, True, error
+            raw_json = row["raw_json"]
+            error = row["error"]
+            if raw_json:
+                try:
+                    return json.loads(raw_json), True, error
+                except json.JSONDecodeError:
+                    print(f"{provider} cache {cache_key}: ignoring invalid cached JSON")
+                    conn.execute(
+                        """
+                        UPDATE api_cache
+                        SET raw_json = NULL, error = ?
+                        WHERE provider = ? AND cache_key = ?
+                        """,
+                        ("invalid cached JSON", provider, cache_key),
+                    )
+                    conn.commit()
+                    if error:
+                        return None, True, error
+            else:
+                return None, True, error
 
     throttle_api_request(provider)
     status_code, payload, error = json_request(url, headers=headers)
@@ -473,8 +491,26 @@ def cached_text_metadata(
             (provider, cache_key),
         ).fetchone()
         if row:
-            raw_json, error = row
-            return json.loads(raw_json) if raw_json else None, True, error
+            raw_json = row["raw_json"]
+            error = row["error"]
+            if raw_json:
+                try:
+                    return json.loads(raw_json), True, error
+                except json.JSONDecodeError:
+                    print(f"{provider} cache {cache_key}: ignoring invalid cached JSON")
+                    conn.execute(
+                        """
+                        UPDATE api_cache
+                        SET raw_json = NULL, error = ?
+                        WHERE provider = ? AND cache_key = ?
+                        """,
+                        ("invalid cached JSON", provider, cache_key),
+                    )
+                    conn.commit()
+                    if error:
+                        return None, True, error
+            else:
+                return None, True, error
 
     throttle_api_request(provider)
     status_code, text, error = text_request(url)
