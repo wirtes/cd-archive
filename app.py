@@ -680,7 +680,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         parsed = urlparse(self.path)
-        if Path(parsed.path).suffix in {".html", ".js", ".css"}:
+        if Path(parsed.path).suffix in {".html", ".js", ".css"} or parsed.path == "/images/mobile_qr.png":
             self.send_header("Cache-Control", "no-cache, max-age=0")
         super().end_headers()
 
