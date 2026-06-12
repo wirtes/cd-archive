@@ -538,6 +538,13 @@ dd {
     height: auto;
   }
 
+  .desktopQrPanel ol {
+    width: 100%;
+    margin: 0;
+    padding-left: 22px;
+    text-align: left;
+  }
+
   .desktopQrUser {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   }
