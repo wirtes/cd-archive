@@ -36,7 +36,6 @@ Every album keeps normalized provider records in `external_metadata`, one row pe
 | `.env` | Local API tokens. This file should not be committed. |
 | `.env.example` | Template showing supported token names. |
 | `scripts/build_database.py` | CSV import, schema creation, API enrichment, cache writes, and manual URL enrichment helpers. |
-| `scripts/migrate_sqlite_to_postgres.py` | One-time migration from the old SQLite database into Postgres. |
 | `scripts/setup_postgres_docker.sh` | Starts a local Postgres container with a persistent data directory. |
 | `app.py` | Local HTTP server and JSON API. |
 
@@ -101,35 +100,9 @@ Use the virtual environment for every app/script command:
 . .venv/bin/activate
 ```
 
-### Migrating From SQLite
-
-If you have an existing `cd_catalog.sqlite`, migrate it into Postgres before running `build_database.py`. This preserves enriched metadata, cached API responses, users, sessions, artist records, cover metadata, and iTunes preview links.
-
-Default local SQLite path:
-
-```sh
-python scripts/migrate_sqlite_to_postgres.py --sqlite data/cd_catalog.sqlite --recreate
-```
-
-Server SQLite path:
-
-```sh
-python scripts/migrate_sqlite_to_postgres.py --sqlite /var/lib/radio1190-archive/data/cd_catalog.sqlite --recreate
-```
-
-`--recreate` drops and rebuilds the Postgres catalog tables before copying data. Omit it only when you intentionally want to keep the existing Postgres schema.
-
-Use `--append` only when you intentionally want to copy SQLite rows into an existing Postgres database without truncating current Postgres rows:
-
-```sh
-python scripts/migrate_sqlite_to_postgres.py --sqlite data/cd_catalog.sqlite --append
-```
-
 ### `scripts/build_database.py`
 
 Imports `data/CD Catalog.csv` only when the Postgres schema does not exist, creates the catalog tables, and optionally enriches albums from MusicBrainz, Discogs, Apple iTunes, and Last.fm. Existing schemas are opened in place so enrichment can be resumed without rebuilding.
-
-For a migrated installation, run enrichment commands after the migration. Do not run a fresh build first unless you intentionally want to create the database from the CSV.
 
 Import the CSV only:
 
@@ -331,14 +304,7 @@ EOF
 
 Use your real token and password values. Keep this file out of git.
 
-For an existing server with an old SQLite database, migrate it now:
-
-```sh
-. .venv/bin/activate
-python scripts/migrate_sqlite_to_postgres.py --sqlite /var/lib/radio1190-archive/data/cd_catalog.sqlite --recreate
-```
-
-For a clean server with no old SQLite database, create the Postgres schema from the CSV instead:
+Create the Postgres schema from the CSV:
 
 ```sh
 . .venv/bin/activate
@@ -459,21 +425,21 @@ The Add/Edit form includes:
 
 ## Database ERD
 
-`external_metadata` is the normalized music-service table. MusicBrainz, Discogs, Apple iTunes, and Last.fm are all represented there as peer providers. `musicbrainz_metadata` is shown separately only because the app still keeps a MusicBrainz-specific release detail cache for richer fields from earlier builds; it is not the master service model.
+`albums` is the catalog root table. MusicBrainz, Discogs, Apple iTunes, and Last.fm matches are normalized through `external_metadata` and summarized in `album_service_status`; `manual_match` marks a provider match as locked so normal enrichment does not overwrite it. `musicbrainz_metadata` remains as a MusicBrainz-specific release detail cache for richer legacy fields, while `api_cache` stores provider request/response payloads independently from album records.
 
 ```mermaid
 erDiagram
     ALBUMS {
-        integer id PK
-        integer row_number
+        integer id PK "identity"
+        integer row_number UK "catalog spreadsheet row"
         text timestamp
         text catalog_number
-        text media_format
+        text media_format "normalized media type"
         text artist
         text album_name
         text label
         text format
-        integer compilation
+        integer compilation "0/1 boolean"
         text country
         text released
         text genre
@@ -488,9 +454,9 @@ erDiagram
     }
 
     ARTISTS {
-        integer id PK
+        integer id PK "identity"
         text name UK
-        text lookup_status
+        text lookup_status "matched/not_found/not_configured/error"
         text lookup_error
         text fetched_at
         text lastfm_mbid
@@ -503,7 +469,7 @@ erDiagram
     }
 
     MUSICBRAINZ_METADATA {
-        integer album_id PK
+        integer album_id PK,FK
         text lookup_status
         text lookup_error
         text fetched_at
@@ -529,7 +495,7 @@ erDiagram
     }
 
     TRACKS {
-        integer id PK
+        integer id PK "identity"
         integer album_id FK
         integer medium_position
         text medium_title
@@ -538,27 +504,28 @@ erDiagram
         text track_number
         text title
         integer length_ms
-        integer explicit
+        integer explicit "0/1 boolean"
+        text preview_url "Apple/iTunes audio preview"
         text recording_id
     }
 
     ALBUM_GENRES {
-        integer id PK
+        integer id PK "identity"
         integer album_id FK
-        text source
+        text source "musicbrainz_genre/musicbrainz_tag/discogs/lastfm/etc."
         text name
         integer count
     }
 
     COVER_ART {
-        integer id PK
+        integer id PK "identity"
         integer album_id FK
-        text source
+        text source "musicbrainz/discogs/apple_itunes/lastfm/etc."
         text image_id
         text types
-        integer is_front
-        integer is_back
-        integer approved
+        integer is_front "0/1 boolean"
+        integer is_back "0/1 boolean"
+        integer approved "0/1 boolean"
         text image_url
         text thumbnail_small
         text thumbnail_large
@@ -568,23 +535,23 @@ erDiagram
     }
 
     ALBUM_SERVICE_STATUS {
-        integer album_id PK
-        text provider PK
-        text lookup_status
-        integer found
+        integer album_id PK,FK
+        text provider PK "musicbrainz/discogs/apple_itunes/lastfm"
+        text lookup_status "matched/not_found/not_configured/error"
+        integer found "1 when lookup_status matched"
         text fetched_at
         text external_id
         text title
         text url
         text lookup_error
-        integer manual_match
+        integer manual_match "1 means locked/manual match"
     }
 
     EXTERNAL_METADATA {
-        integer id PK
+        integer id PK "identity"
         integer album_id FK
-        text provider
-        text lookup_status
+        text provider "musicbrainz/discogs/apple_itunes/lastfm"
+        text lookup_status "matched/not_found/not_configured/error"
         text lookup_error
         text fetched_at
         text external_id
@@ -596,7 +563,7 @@ erDiagram
         integer track_count
         text cover_url
         text raw_json
-        integer manual_match
+        integer manual_match "1 means locked/manual match"
     }
 
     API_CACHE {
@@ -609,14 +576,55 @@ erDiagram
         text error
     }
 
-    ARTISTS ||--o{ ALBUMS : "matches by artist name"
-    ALBUMS ||--o| MUSICBRAINZ_METADATA : "has MusicBrainz detail cache"
-    ALBUMS ||--o{ TRACKS : "has"
-    ALBUMS ||--o{ ALBUM_GENRES : "has"
-    ALBUMS ||--o{ COVER_ART : "has"
-    ALBUMS ||--o{ ALBUM_SERVICE_STATUS : "tracks service status"
-    ALBUMS ||--o{ EXTERNAL_METADATA : "has normalized service metadata"
+    USERS {
+        text username PK
+        text password_hash
+        integer is_admin "0/1 boolean"
+        integer is_editor "0/1 boolean"
+        integer is_active "0/1 boolean"
+        text created_at
+    }
+
+    AUTH_SESSIONS {
+        text token_hash PK
+        text username FK
+        text created_at
+        text last_seen
+    }
+
+    SCAN_EVENTS {
+        integer id PK "identity"
+        text username FK
+        text created_at
+        text payload_json "mobile UPC scan payload"
+    }
+
+    APP_SETTINGS {
+        text key PK
+        text value
+        text updated_at
+    }
+
+    ARTISTS ||--o{ ALBUMS : "matches by albums.artist"
+    ALBUMS ||--o| MUSICBRAINZ_METADATA : "has MusicBrainz detail"
+    ALBUMS ||--o{ TRACKS : "has tracklist"
+    ALBUMS ||--o{ ALBUM_GENRES : "has genres/tags"
+    ALBUMS ||--o{ COVER_ART : "has artwork"
+    ALBUMS ||--o{ ALBUM_SERVICE_STATUS : "has provider status"
+    ALBUMS ||--o{ EXTERNAL_METADATA : "has provider metadata"
+    USERS ||--o{ AUTH_SESSIONS : "owns sessions"
+    USERS ||--o{ SCAN_EVENTS : "creates scan events"
 ```
+
+Important constraints and indexes:
+
+- `albums.row_number` is unique and preserves the source catalog row.
+- `artists.name` is unique and is joined to albums by normalized artist text, not by a stored `artist_id`.
+- `album_genres` enforces `UNIQUE(album_id, source, name)`.
+- `album_service_status` enforces one row per album/provider with `PRIMARY KEY(album_id, provider)`.
+- `external_metadata` enforces one normalized metadata row per album/provider with `UNIQUE(album_id, provider)`.
+- `api_cache` is keyed by `(provider, cache_key)` and may hold successful responses, API errors, and cached misses.
+- Indexes exist for `albums.artist`, `albums.album_name`, `artists.name`, `musicbrainz_metadata.mb_release_id`, child table `album_id` columns, and `scan_events(username, id)`.
 
 ## Data And Asset Storage
 

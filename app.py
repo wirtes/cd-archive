@@ -1449,7 +1449,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     f"barcode-search:{barcode}",
                     search_url,
                     headers=headers,
-                    refresh_cache=False,
+                    refresh_cache=True,
                 )
                 results = (search_payload or {}).get("results") or []
                 selected = next((item for item in results if item.get("type") == "release" and item.get("id")), None) or next(
@@ -1467,7 +1467,7 @@ class CatalogHandler(SimpleHTTPRequestHandler):
                     f"release:{release_id}",
                     detail_url,
                     headers=headers,
-                    refresh_cache=False,
+                    refresh_cache=True,
                 )
                 if detail_error or not detail_payload:
                     self.send_json({"error": detail_error or "Discogs release detail was not found."}, HTTPStatus.NOT_FOUND)
